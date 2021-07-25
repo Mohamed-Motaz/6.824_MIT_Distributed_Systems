@@ -1,10 +1,11 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -30,11 +31,17 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
 	// Your worker implementation here.
 
+	args := TaskArgs{X: 10};
+	reply := TaskReply{};
+
+	call("Coordinator.SendingATaskToWorker", &args, &reply)
+	fmt.Println("I sent a request: ", args)
+	fmt.Println("And got this back", reply);
+
 	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	//  CallExample()
 
 }
 
@@ -74,12 +81,12 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		log.Fatal("dialing:", err)
 	}
 	defer c.Close()
-
+	fmt.Println("About to start the call");
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
 	}
 
-	fmt.Println(err)
+	fmt.Println("This is the error", err)
 	return false
 }

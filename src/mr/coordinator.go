@@ -1,15 +1,21 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
+import (
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"sync"
+)
 
 
 type Coordinator struct {
 	// Your definitions here.
-
+	mu sync.Mutex
+	doneJobs map[string]bool
+	fileNames []string
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -20,9 +26,36 @@ type Coordinator struct {
 // the RPC argument and reply types are defined in rpc.go.
 //
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
+	fmt.Println("I was called");
 	reply.Y = args.X + 1
 	return nil
 }
+
+func (c *Coordinator) SendingATaskToWorker(args *TaskArgs, reply *TaskReply) error {
+	c.mu.Lock();
+	defer c.mu.Unlock();
+	fmt.Println("Received a request from a worker containing args: ", args);
+	
+	taskFileName, err := c.decideTaskToGiveOut();
+	if err != nil{
+		//no more jobs
+		fmt.Println("All jobs done, about to exit the program")
+		os.Exit(0);
+	}
+	reply.FileName = taskFileName;
+	return nil
+}
+
+func (c *Coordinator) decideTaskToGiveOut() (string, error){
+	
+	for _, v := range c.fileNames{
+		if done, ok := c.doneJobs[v]; !ok && !done{
+			return v, nil;
+		}
+	}
+	return "", fmt.Errorf("no more files to serve");
+}
+
 
 
 //
@@ -63,7 +96,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
-
+	fmt.Println("These are all the file names", files);
+	c.fileNames = files;
 
 	c.server()
 	return &c
