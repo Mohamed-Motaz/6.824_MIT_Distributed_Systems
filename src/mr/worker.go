@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"log"
 	"net/rpc"
+	"os"
 )
 
 //
@@ -32,13 +33,39 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// Your worker implementation here.
+	//keep asking for tasks continuously
+	for {
+		args := GetTaskArgs{};
+		reply := GetTaskReply{};
+		call("Coordinator.HandleGetTask", &args, &reply) //blocking call that waits until we get a reply
+		fmt.Println("I sent a request: ", args)
+		fmt.Println("And got this back", reply);
 
-	args := GetTaskArgs{};
-	reply := GetTaskReply{};
+		switch reply.TaskType{
+		case Map:
+			performMap(reply.MapFile, reply.TaskNum, reply.NReduceTasks, mapf);
+		case Reduce:
+			performReduce(reply.TaskNum, reply.NMapTasks, reducef)
+		case Done:
+			//no more tasks, so we as workers exit
+			os.Exit(0);
+		default:
+			fmt.Errorf("Bad task type? %s", reply.TaskType)
+		}
 
-	call("Coordinator.SendingATaskToWorker", &args, &reply)
-	fmt.Println("I sent a request: ", args)
-	fmt.Println("And got this back", reply);
+		//tell the coordinator that we are done
+		finArgs := FinishedTasksArgs{
+			TaskType: reply.TaskType,
+			TaskNum: reply.TaskNum,
+		}
+		finReply := FinishedTaskReply{}
+		call("Coordinator.HandleFinishedTask", &finArgs, &finReply) 
+
+		
+
+
+	}
+	
 
 	// uncomment to send the Example RPC to the coordinator.
 	//  CallExample()
