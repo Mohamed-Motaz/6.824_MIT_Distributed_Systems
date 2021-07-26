@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 )
 
 //
@@ -105,9 +106,57 @@ func performMap(fileName string, taskNum int, nReduceTasks int, mapf func(string
 	for r := 0; r < nReduceTasks; r++{
 		finalizeIntermediateFile(tmpFileNames[r], taskNum, r)
 	}
-
-
 }
+
+func performReduce(taskNum int, nMapTasks int, reducef func(string, []string) string){
+	//get all intermediate files corresponding to said reduce task,
+	//and collect the corresponding kv pairs
+	kva := []KeyValue{}
+	for m := 0; m < nMapTasks; m++{
+		fileName := getIntermediateFile(0, taskNum)
+		file, err := os.Open(fileName);
+		if err != nil{
+			log.Fatalf("cannot open %v", fileName)
+		}
+
+		dec := json.NewDecoder(file);
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil{
+				break
+			}
+			kva = append(kva, kv);
+		}
+	}
+	sort.Sort(ByKey(kva))
+
+	//create a temp reduce file to write the values
+	tmpFile, err := ioutil.TempFile("", "")
+	if err != nil{
+		log.Fatalf("cannot open tmpfile")
+	}
+	tmpFileName := tmpFile.Name();
+	key_begin := 0
+	for key_begin < len(kva) {
+		key_end := key_begin + 1
+		for key_end < len(kva) && kva[key_end].Key == kva[key_begin].Key {
+			key_end++
+		}
+		values := []string{}
+		for k := key_begin; k < key_end; k++ {
+			values = append(values, kva[k].Value)
+		}
+		output := reducef(kva[key_begin].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(tmpFile, "%v %v\n", kva[key_begin].Key, output)
+
+		key_begin = key_end
+	}
+	//atomically rename reduce file to final reduce file
+	finalizeReduceFile(tmpFileName, taskNum);
+}
+
 
 //
 // main/mrworker.go calls this function.
@@ -142,10 +191,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		finReply := FinishedTaskReply{}
 		call("Coordinator.HandleFinishedTask", &finArgs, &finReply) 
-
-		
-
-
 	}
 	
 
