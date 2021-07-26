@@ -199,8 +199,8 @@ timeout -k 2s 180s ../mrworker ../../mrapps/early_exit.so &
 # `jobs` ensures that any completed old processes from other tests
 # are not waited upon
 jobs &> /dev/null
-wait -n
-
+wait 
+#the wait above had -n which cause a crash
 # a process has exited. this means that the output should be finalized
 # otherwise, either a worker or the coordinator exited early
 sort mr-out* | grep . > mr-wc-all-initial

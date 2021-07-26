@@ -113,7 +113,7 @@ func performReduce(taskNum int, nMapTasks int, reducef func(string, []string) st
 	//and collect the corresponding kv pairs
 	kva := []KeyValue{}
 	for m := 0; m < nMapTasks; m++{
-		fileName := getIntermediateFile(0, taskNum)
+		fileName := getIntermediateFile(m, taskNum)
 		file, err := os.Open(fileName);
 		if err != nil{
 			log.Fatalf("cannot open %v", fileName)
@@ -169,8 +169,8 @@ func Worker(mapf func(string, string) []KeyValue,
 		args := GetTaskArgs{};
 		reply := GetTaskReply{};
 		call("Coordinator.HandleGetTask", &args, &reply) //blocking call that waits until we get a reply
-		fmt.Println("I sent a request: ", args)
-		fmt.Println("And got this back", reply);
+		//fmt.Println("I sent a request: ", args)
+		//fmt.Println("And got this back", reply);
 
 		switch reply.TaskType{
 		case Map:
@@ -219,7 +219,7 @@ func CallExample() {
 	call("Coordinator.Example", &args, &reply)
 
 	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	//fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
 //
@@ -235,12 +235,12 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		log.Fatal("dialing:", err)
 	}
 	defer c.Close()
-	fmt.Println("About to start the call");
+	//fmt.Println("About to start the call");
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
 	}
 
-	fmt.Println("This is the error", err)
+	//fmt.Println("This is the error", err)
 	return false
 }
