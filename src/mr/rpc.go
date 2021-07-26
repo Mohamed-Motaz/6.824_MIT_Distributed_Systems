@@ -26,14 +26,50 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
-type TaskArgs struct{
-	X int
+type TaskType int;
+
+const (
+	Mao TaskType = 1;
+	Reduce TaskType = 2;
+	Done TaskType = 3;
+)
+
+//No args to send the coordinator for tasks
+type GetTaskArgs struct{}
+
+//Tasks sent from the coordinator to the workers
+type GetTaskReply struct{
+
+	//Type of the task
+	TaskType TaskType
+
+	//Num of the task (either map or reduce)
+	TaskNum int
+
+	//needed for Map (to know which file to write)
+	NReduceTasks int
+
+	//needed for Map (to know which file to read)
+	MapFile string
+
+	//needed for Reduce (to know how many intermediate files to read)
+	NMapTasks int
+
 }
 
-type TaskReply struct{
-	FileName string
+
+//Finished tasks sent from the idle workers to the coordinator to indicate that a task has been finished
+type FinishedTasksArgs struct{
+	//Type of the task
+	TaskType TaskType
+
+	//Num of the task (either map or reduce)
+	TaskNum int
 }
 
+//No reply needed from the workers to the coordinator
+type FinishedTaskReply struct{
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.

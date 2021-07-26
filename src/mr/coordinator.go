@@ -19,19 +19,12 @@ type Coordinator struct {
 }
 
 // Your code here -- RPC handlers for the worker to call.
-
-//
-// an example RPC handler.
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	fmt.Println("I was called");
-	reply.Y = args.X + 1
-	return nil
-}
 
-func (c *Coordinator) SendingATaskToWorker(args *TaskArgs, reply *TaskReply) error {
+
+func (c *Coordinator) SendingATaskToWorker(args *GetTaskArgs, reply *GetTaskReply) error {
 	c.mu.Lock();
 	defer c.mu.Unlock();
 	fmt.Println("Received a request from a worker containing args: ", args);
@@ -40,9 +33,9 @@ func (c *Coordinator) SendingATaskToWorker(args *TaskArgs, reply *TaskReply) err
 	if err != nil{
 		//no more jobs
 		fmt.Println("All jobs done, about to exit the program")
-		os.Exit(0);
 	}
 	reply.FileName = taskFileName;
+	reply.TaskToDo = TaskType()
 	return nil
 }
 
@@ -79,12 +72,10 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
-
+	
 	// Your code here.
 
-
-	return ret
+	return len(c.doneJobs) == len(c.fileNames)
 }
 
 //

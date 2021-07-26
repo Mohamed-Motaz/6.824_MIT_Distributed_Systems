@@ -33,8 +33,8 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// Your worker implementation here.
 
-	args := TaskArgs{X: 10};
-	reply := TaskReply{};
+	args := GetTaskArgs{};
+	reply := GetTaskReply{};
 
 	call("Coordinator.SendingATaskToWorker", &args, &reply)
 	fmt.Println("I sent a request: ", args)
