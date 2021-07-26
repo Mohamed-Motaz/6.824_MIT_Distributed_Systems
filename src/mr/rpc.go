@@ -29,7 +29,7 @@ type ExampleReply struct {
 type TaskType int;
 
 const (
-	Mao TaskType = 1;
+	Map TaskType = 1;
 	Reduce TaskType = 2;
 	Done TaskType = 3;
 )

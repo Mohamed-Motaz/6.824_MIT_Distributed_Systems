@@ -8,14 +8,27 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 
 type Coordinator struct {
 	// Your definitions here.
 	mu sync.Mutex
-	doneJobs map[string]bool
-	fileNames []string
+	
+	mapFiles []string
+	nMapTasks int
+	nReduceTasks int
+
+	//keep track of when tasks are assigned
+	//and which tasks have finished
+	mapTasksFinished []bool
+	mapTasksIssued []time.Time  //time when each task was assigned
+	reduceTasksFinished []bool
+	reduceTasksIssued []time.Time //time when each task was assigned
+
+	//true when all reduce tasks are complete
+	isDone bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -24,29 +37,37 @@ type Coordinator struct {
 //
 
 
-func (c *Coordinator) SendingATaskToWorker(args *GetTaskArgs, reply *GetTaskReply) error {
+func (c *Coordinator) HandleGetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	c.mu.Lock();
 	defer c.mu.Unlock();
 	fmt.Println("Received a request from a worker containing args: ", args);
 	
-	taskFileName, err := c.decideTaskToGiveOut();
-	if err != nil{
-		//no more jobs
-		fmt.Println("All jobs done, about to exit the program")
-	}
-	reply.FileName = taskFileName;
-	reply.TaskToDo = TaskType()
+	reply.NReduceTasks = c.nReduceTasks
+	reply.NMapTasks = c.nMapTasks
+
+	//TODO
+	//issue all map and reduce tasks
+
+
+	reply.TaskType = Done
+	c.isDone = true
+
 	return nil
 }
 
-func (c *Coordinator) decideTaskToGiveOut() (string, error){
-	
-	for _, v := range c.fileNames{
-		if done, ok := c.doneJobs[v]; !ok && !done{
-			return v, nil;
-		}
+func (c *Coordinator) HandleFinishedTask(args *FinishedTasksArgs, reply *FinishedTaskReply) error{
+	c.mu.Lock();
+	defer c.mu.Unlock()
+
+	switch args.TaskType{
+	case Map:
+		c.mapTasksFinished[args.TaskNum] = true;
+	case Reduce:
+		c.reduceTasksFinished[args.TaskNum] = true;
+	default:
+		log.Fatalf("Bad finished task? %s", args.TaskType)
 	}
-	return "", fmt.Errorf("no more files to serve");
+	return nil;
 }
 
 
