@@ -55,7 +55,7 @@ func (c *Coordinator) HandleGetTask(args *GetTaskArgs, reply *GetTaskReply) erro
 				if c.mapTasksIssued[m].IsZero() || 
 					time.Since(c.mapTasksIssued[m]).Seconds() > 10 {  //been more than 10 seconds with no response
 					
-						reply.MapFile = c.mapFiles[m];
+					reply.MapFile = c.mapFiles[m];
 					reply.TaskNum = m;
 					reply.TaskType = Map;  
 					c.mapTasksIssued[m] = time.Now()
@@ -119,7 +119,7 @@ func (c *Coordinator) HandleFinishedTask(args *FinishedTasksArgs, reply *Finishe
 	case Reduce:
 		c.reduceTasksFinished[args.TaskNum] = true;
 	default:
-		log.Fatalf("bad finished task? %s", args.TaskType)
+		log.Fatalf("bad finished task? %v", args.TaskType)
 	}
 
 	//wake up the getTask handler as a task has finished, so we might be able to assign another
@@ -180,7 +180,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.reduceTasksFinished = make([]bool, nReduce)
 	c.reduceTasksIssued = make([]time.Time, nReduce)
 
-	//wake up GetTasl handler thread every once in awhile to check if
+	//wake up GetTask handler thread every once in awhile to check if
 	//some task has timed out, so we can reissue it to a different worker
 	go func(){
 		for {

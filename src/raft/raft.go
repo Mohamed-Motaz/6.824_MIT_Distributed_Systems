@@ -18,12 +18,26 @@ package raft
 //
 
 import (
-//	"bytes"
+	//	"bytes"
 	"sync"
 	"sync/atomic"
 
-//	"6.824/labgob"
+	//	"6.824/labgob"
 	"6.824/labrpc"
+)
+
+type State string
+
+const (
+	Follower State = "follower"
+	Candidate State = "candidate"
+	Leader State = "leader"
+)
+
+const (
+	electionInterval  int64 = 150
+	timeoutSection    int64 = 150
+	heartBeatInterval int64 = 75
 )
 
 
@@ -64,6 +78,21 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	state State          //record the current state (follower, candidate, leader)
+	lastReceived int64   //record the last time a valid RPC is recieved or default -1
+	currentTerm int      //record the latest term seen by the current server or initally 0
+	votedFor int         //record the id of the candidate whose current term is voted by the server or default -1
+
+}
+
+type AppendEntryArgs struct{
+	Term int
+	LeaderId int
+}
+type AppendEntryReply struct{
+	Term int
+	Success bool
+	
 }
 
 // return currentTerm and whether this server
@@ -143,6 +172,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term int         //candidate's term
+	CandidateId int  //id of the candidate requesting the vote
 }
 
 //
@@ -151,6 +182,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	Term int    //response from the server of the current term
+	VoteGranted bool //response whether or not agreed to vote for me as a leader
 }
 
 //
