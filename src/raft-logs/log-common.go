@@ -11,27 +11,27 @@ import (
 type logTopic string
 
 const (
-	dClient  logTopic = "CLNT"
-	dCommit  logTopic = "CMIT"
-	dDrop    logTopic = "DROP"
-	dError   logTopic = "ERRO"
-	dInfo    logTopic = "INFO"
-	dLeader  logTopic = "LEAD"
-	dLog     logTopic = "LOG1"
-	dLog2    logTopic = "LOG2"
-	dPersist logTopic = "PERS"
-	dSnap    logTopic = "SNAP"
-	dTerm    logTopic = "TERM"
-	dTest    logTopic = "TEST"
-	dTimer   logTopic = "TIMR"
-	dTrace   logTopic = "TRCE"
-	dVote    logTopic = "VOTE"
-	dWarn    logTopic = "WARN"
+	DClient  logTopic = "CLNT"
+	DCommit  logTopic = "CMIT"
+	DDrop    logTopic = "DROP"
+	DError   logTopic = "ERRO"
+	DInfo    logTopic = "INFO"
+	DLeader  logTopic = "LEAD"
+	DLog     logTopic = "LOG1"
+	DLog2    logTopic = "LOG2"
+	DPersist logTopic = "PERS"
+	DSnap    logTopic = "SNAP"
+	DTerm    logTopic = "TERM"
+	DTest    logTopic = "TEST"
+	DTimer   logTopic = "TIMR"
+	DTrace   logTopic = "TRCE"
+	DVote    logTopic = "VOTE"
+	DWarn    logTopic = "WARN"
 	debug = 1
 )
 
 var debugStart time.Time
-var debugVerbosity int
+var debugVerbosity int = -1;
 
 func getVerbosity() int {
 	v := os.Getenv("VERBOSE")
@@ -45,16 +45,20 @@ func getVerbosity() int {
 	}
 	return level
 }
-func init() {
+func initDebugger() {
 	debugVerbosity = getVerbosity()
 	debugStart = time.Now()
-
+	
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 }
 
 
 func Log(topic logTopic, format string, a ...interface{}) {
-	if debug >= 1 {
+	if debugVerbosity == -1 {
+		 initDebugger();
+	}
+	
+	if debug >= 1 && debugVerbosity >= 1 {
 		time := time.Since(debugStart).Microseconds()
 		time /= 100
 		prefix := fmt.Sprintf("%06d %v ", time, string(topic))

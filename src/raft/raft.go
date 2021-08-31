@@ -24,6 +24,7 @@ import (
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
+	raftlogs "6.824/raft-logs"
 )
 
 //
@@ -269,7 +270,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-    
+    raftlogs.Log(raftlogs.DTimer, "this is me %d", rf.me);
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash

@@ -22,18 +22,12 @@ TOPICS = {
     "PERS": "#d08341",
     "SNAP": "#FD971F",
     "DROP": "#ff615c",
-    "CLNT": "#24813c",
+    "CLNT": "#00813c",
     "TEST": "#fe2c79",
     "INFO": "#ffffff",
     "WARN": "#d08341",
-    "ERRO": "#fefe26",
+    "ERRO": "#fe2626",
     "TRCE": "#fe2626",
-
-
-    "SVER": "#666626",
-	"APPL": "#192c31",
-	"ROLE": "#7783f1",
-    "APPD": "#cccccc",
 }
 # fmt: on
 
