@@ -36,7 +36,7 @@ const (
 
 	ELECTION_TIMEOUT = 800 * time.Millisecond
 	RANDOM_PLUS      = 200 * time.Millisecond
-
+	HEART_INTERVAL   = 300 * time.Millisecond
 )
 
 //
@@ -77,6 +77,9 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	peerCnt   int
+	wakeLeaderCond *sync.Cond
+	killedChan chan struct{}
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -106,8 +109,11 @@ type Raft struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
-	var term int
-	var isleader bool
+	rf.mu.Lock()
+	var term int = rf.currentTerm
+	var isleader bool = rf.role == LEADER
+	rf.mu.Unlock()
+
 	// Your code here (2A).
 	return term, isleader
 }
@@ -195,12 +201,99 @@ type RequestVoteReply struct {
 	VoteGranted bool //true means candidate received vote
 }
 
+type AppendEntryArgs struct {
+	Term int //currentTerm of leader
+	LeaderId int 
+	PrevLogIndex int
+	PrevLogTerm int
+	Entries []LogEntry
+	LeaderCommit int
+}
+
+//
+// example RequestVote RPC reply structure.
+// field names must start with capital letters!
+//
+type AppendEntryReply struct {
+	// Your data here (2A).
+	Term int //currentTerm, for leader to update itself
+	Success bool //true if follower contained entry matching prevLogIndex and prevLogTerm
+}
+
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	//I am asked if I agree for the candidate to become a leader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	defer func(){
+		reply.Term = rf.currentTerm     //always ensure the term gets updated before the function returns
+	}()
+
+	rf.logger.Log(raftlogs.DVote, "S%d received a request vote from S%d, his term is %d and mine is %d", 
+			rf.me, args.CandidateId,  args.Term, rf.currentTerm)
+
+	if args.Term < rf.currentTerm {
+		reply.VoteGranted = false
+		return
+	}
+
+	if args.Term > rf.currentTerm {
+		//his term is higher than mine
+		rf.followerToFollowerWithHigherTermWithLock(args.Term)	
+
+	}
+	if rf.role == LEADER {
+		//I am a leader
+		reply.VoteGranted = false
+		rf.logger.Log(raftlogs.DTimer, 
+			"S%d is the leader and is requested to vote by another candidate S%d",
+			 rf.me, args.CandidateId)
+			return
+	}
+	myIdx := rf.lastLogIndex
+	myLastTerm := rf.logs[rf.lastLogIndex].Term
+	if rf.votedFor == args.CandidateId || (
+		rf.votedFor == -1 && checkCandidatesLogIsNew(myLastTerm, args.LastLogTerm,
+											myIdx, args.LastLogIndex)){
+		reply.VoteGranted = true
+		rf.logger.Log(raftlogs.DVote, 
+			"S%d granted its vote to candidate S%d and it currently is a %d", 
+			rf.me, args.CandidateId, rf.role)
+
+		rf.initTimeOut()
+		rf.votedFor = args.CandidateId
+	}else{
+		reply.VoteGranted = false
+		if rf.votedFor == -1 {
+			rf.logger.Log(raftlogs.DVote,
+				 "S%d rejected S%d because of failed log comparison",
+				rf.me, args.CandidateId)
+		}else{
+			rf.logger.Log(raftlogs.DVote,
+				"S%d rejected S%d because already voted for S%d",
+				rf.me, args.CandidateId, rf.votedFor)
+		}
+	}
+
+
+}
+
+func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply){
+	rf.logger.Log(raftlogs.DInfo, "S%d received appendEntry from leader S%d",
+				rf.me, args.LeaderId)
+	rf.mu.Lock()
+	if args.Term > rf.currentTerm {
+		rf.logger.Log(raftlogs.DInfo, 
+			"S%d is no longer a leader for the term %d, since S%d is now the leader for the term %d",
+		rf.me, rf.currentTerm, args.LeaderId, args.Term)
+		rf.followerToFollowerWithHigherTermWithLock(args.Term)
+	}
+	rf.mu.Unlock()
+
+	rf.initTimeOut()
 }
 
 
@@ -230,14 +323,27 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
-func (rf *Raft) candidateToFollowerBecauseOfHigherTerm(term int){
-	//called when the candidate discovers a higher termf follower
+func (rf *Raft) followerToFollowerWithHigherTermWithLock(term int){
+	rf.logger.Log(raftlogs.DTimer, "S%d changed terms from %d to %d",
+				rf.me, rf.currentTerm, term)
+
+	rf.role = FOLLOWER
+	rf.votedFor = -1
+	rf.currentTerm = term
+	rf.votes = 0
+
+}
+
+func (rf *Raft) candidateToFollowerBecauseOfHigherTermWithLock(term int){
+	//called when the candidate discovers a higher term follower
 	rf.logger.Log(raftlogs.DTerm, 
-		"S%d term change from %d to %d\n as he was demoted from candidate to follower",
+		"S%d term change from %d to %d as he was demoted from candidate to follower",
 		 rf.me, rf.currentTerm, term)
+
 	rf.currentTerm = term
 	rf.role = FOLLOWER
 	rf.votedFor = -1
+	rf.votes = 0
 }
 
 //
@@ -254,6 +360,9 @@ func (rf *Raft) candidateToFollowerBecauseOfHigherTerm(term int){
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+	rf.logger.Log(raftlogs.DDrop, "S%d raft killed #######\n", rf.me)
+	rf.killedChan <- struct{}{}
+
 }
 
 func (rf *Raft) killed() bool {
@@ -264,17 +373,41 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
-
-		// Your code here to check if a leader election should
-		// be started and to randomize sleeping time using
-		// time.Sleep().
-		if rf.checkTimeOut(){
-			rf.initTimeOut()
-			go rf.newElection()
+	killed := false
+	go func(){    //create a go routine to constantly check if I was killed or not
+		select {
+		case <- rf.killedChan:
+			rf.logger.Log(raftlogs.DDrop, "S%d has finally died", rf.me)
+			rf.mu.Lock()
+			killed = true
+			rf.mu.Unlock()
+			return
 		}
-		rf.sleepTimeOut()
+	}()
+	for {
+			rf.mu.Lock()
+			if killed {
+				break
+			}
+			rf.logger.Log(raftlogs.DDrop, "S%d not killed yet", rf.me)
+			// Your code here to check if a leader election should
+			// be started and to randomize sleeping time using
+			// time.Sleep().
+			if rf.checkTimeOut(){
+				rf.initTimeOut()
+				if rf.role != LEADER{
+					go rf.newElection()
+
+				}
+			}			
+			rf.mu.Unlock()
+
+			rf.sleepTimeOut()
+		
 	}
+		
+	
+
 }
 
 
@@ -308,9 +441,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.logs = make([]LogEntry, 1)
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
+	rf.killedChan = make(chan struct{})
 	rf.majority = (len(peers) + 1) / 2;
 	rf.votes = 0
 	rf.role = FOLLOWER
+	rf.wakeLeaderCond = sync.NewCond(&rf.mu)
 	rf.initTimeOut()
 
 	// initialize from state persisted before a crash

@@ -13,14 +13,16 @@ func getRandomElectionTimeout() time.Duration {
 }
 
 func (rf *Raft) checkTimeOut() bool {
-	// rf.timerMuLock.Lock()
-	// defer rf.timerMuLock.Unlock()
+	rf.timerMuLock.Lock()
+	defer rf.timerMuLock.Unlock()
 	return rf.timeToTimeOut.Before(time.Now())
 }
 
 func (rf *Raft) sleepTimeOut() {
+	rf.timerMuLock.Lock()
 	timeToTimeOut := rf.timeToTimeOut
 	now := time.Now()
+	rf.timerMuLock.Unlock()
 	if (timeToTimeOut.After(now)){
 			time.Sleep(timeToTimeOut.Sub(now))
 
@@ -36,6 +38,13 @@ func (rf *Raft) initTimeOut(){
 	    rf.me, time.Now().UnixNano()/1e6, rf.timeToTimeOut.UnixNano()/1e6, totalTime)
 }
 
+
+func checkCandidatesLogIsNew(selfTerm int, otherTerm int, selfIdx int, otherIdx int) bool{
+	if (selfTerm != otherTerm){
+		return otherTerm > selfIdx
+	}
+	return otherIdx >= selfIdx
+}
 
 
 //RPCs
@@ -72,5 +81,10 @@ func (rf *Raft) initTimeOut(){
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntry(server int, args *AppendEntryArgs, reply *AppendEntryReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntry", args, reply)
 	return ok
 }
