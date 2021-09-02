@@ -52,8 +52,11 @@ func initDebugger() {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 }
 
+type Logger struct{
 
-func Log(topic logTopic, format string, a ...interface{}) {
+}
+
+func (lg *Logger ) Log(topic logTopic, format string, a ...interface{}) {
 	if debugVerbosity == -1 {
 		 initDebugger();
 	}

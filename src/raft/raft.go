@@ -315,12 +315,36 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply){
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term := -1
+	term := -1	
 	isLeader := true
-	// Your code here (2B).
+	
+	rf.mu.Lock()
 
+	term = rf.currentTerm
+	isLeader = rf.role == LEADER
+	if !isLeader || rf.killed(){
+		rf.mu.Unlock()
+		return 0, term, false
+	}
+	rf.logger.Log(raftlogs.DClient, 
+		"S%d received a command %#v at index %d for the term %d", 
+			rf.me, command, rf.lastLogIndex + 1, rf.currentTerm)
+
+	rf.appendOneLogEntry(LogEntry{
+		Command: command,
+		Term: term,
+	})
+
+	rf.mu.Unlock()
 
 	return index, term, isLeader
+}
+
+//hold lock
+func (rf *Raft) appendOneLogEntry(logEntry LogEntry){
+	rf.lastLogIndex++
+	rf.logs = append(rf.logs, logEntry)
+	rf.logger.Log(raftlogs.DLog, "S%d appended log num %d to its logs", rf.me, rf.lastLogIndex)
 }
 
 func (rf *Raft) followerToFollowerWithHigherTermWithLock(term int){
@@ -375,14 +399,11 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	killed := false
 	go func(){    //create a go routine to constantly check if I was killed or not
-		select {
-		case <- rf.killedChan:
+			<- rf.killedChan    //block until u receive killed from the channel
 			rf.logger.Log(raftlogs.DDrop, "S%d has finally died", rf.me)
 			rf.mu.Lock()
 			killed = true
 			rf.mu.Unlock()
-			return
-		}
 	}()
 	for {
 			rf.mu.Lock()

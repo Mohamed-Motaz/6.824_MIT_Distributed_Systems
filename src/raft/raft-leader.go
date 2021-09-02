@@ -15,42 +15,25 @@ func (rf *Raft) doLeaderWork(term int){
 		return
 	}
 	heartsbeatsTimer := time.NewTimer(HEART_INTERVAL)
-	args := &AppendEntryArgs{
-		Term: term,
-		LeaderId: rf.me,
-		PrevLogIndex: rf.lastLogIndex,
-		PrevLogTerm: rf.logs[rf.lastLogIndex].Term,
-	}	
+	followersKilled := make(chan bool, rf.peerCnt - 1)
 	rf.mu.Unlock()
+
 	go func(){
-		for{
-			
 			select{
 				case <- heartsbeatsTimer.C:
-					rf.mu.Lock()
-					if (rf.role != LEADER){
-						rf.mu.Unlock()
-						return
-					}
-					rf.mu.Unlock()
-					//need to send appendEntries to all followers
-					rf.wakeLeaderCond.Broadcast()   //broadcast to wake the leader
-					for i := 0; i < rf.peerCnt; i++{
-						if i != rf.me{
-							go func(peer int) {
-								rf.logger.Log(raftlogs.DLeader, "S%d sending append entries to S%d", rf.me, peer)
-								rf.sendAppendEntry(peer, args, &AppendEntryReply{})
-							}(i)
-						}
-					}
+					rf.wakeLeaderCond.Broadcast()  //wake up leader to send heartbeats
 					heartsbeatsTimer.Reset(HEART_INTERVAL)
-				
+				case <- done:
+					rf.logger.Log(raftlogs.DLeader, "S%d has stopped giving out heatbeats", rf.me)
+					return
+
 			}
-		}
+		
 			
 		
 	}()
 
 }
 
+						rf.logger.Log(raftlogs.DLeader, "S%d sending append entries to S%d", rf.me, peer)
 

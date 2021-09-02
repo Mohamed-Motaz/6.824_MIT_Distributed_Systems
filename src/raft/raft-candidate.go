@@ -9,14 +9,14 @@ func (rf *Raft) doWorkBeforeTransitioningToLeader(){
 	rf.logger.Log(raftlogs.DLeader, 
 		"S%d just become leader for the term %d",
 		rf.me, rf.currentTerm)
-	for i := 0; i < rf.peerCnt; i++{
+	for i := 0; i < rf.peerCnt && !rf.killed(); i++{
 		rf.nextIndex[i] = rf.lastLogIndex + 1
 		rf.matchIndex[i] = 0
 	}
 }
 
 func (rf *Raft) doCandidateWork(term int, args *RequestVoteArgs){
-	for i := 0; i < rf.peerCnt; i++ {
+	for i := 0; i < rf.peerCnt && !rf.killed(); i++ {
 		if i != rf.me {
 			go func(peer int) {
 				reply := &RequestVoteReply{

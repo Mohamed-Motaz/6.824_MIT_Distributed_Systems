@@ -22,12 +22,18 @@ TOPICS = {
     "PERS": "#d08341",
     "SNAP": "#FD971F",
     "DROP": "#ff615c",
-    "CLNT": "#00813c",
+    "CLNT": "#24813c",
     "TEST": "#fe2c79",
     "INFO": "#ffffff",
     "WARN": "#d08341",
-    "ERRO": "#fe2626",
+    "ERRO": "#fefe26",
     "TRCE": "#fe2626",
+
+
+    "SVER": "#666626",
+	"APPL": "#192c31",
+	"ROLE": "#7783f1",
+    "APPD": "#cccccc",
 }
 # fmt: on
 
@@ -68,10 +74,10 @@ def main(
         try:
             time, topic, *msg = line.strip().split(" ")
             # To ignore some topics
-            if topic not in topics:
-                continue
-
             msg = " ".join(msg)
+            if topic not in topics:
+                print(time, topic, msg)
+                continue
 
             # Debug calls from the test suite aren't associated with
             # any particular peer. Otherwise we can treat second column
@@ -91,7 +97,7 @@ def main(
             # space. Heavylifting is done through rich.column.Columns object
             else:
                 cols = ["" for _ in range(n_columns)]
-                msg = "" + msg
+                msg = time + " " + msg
                 cols[i] = msg
                 col_width = int(width / n_columns)
                 cols = Columns(cols, width=col_width - 1, equal=True, expand=True)
