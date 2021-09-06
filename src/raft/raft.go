@@ -79,6 +79,7 @@ type Raft struct {
 	peerCnt   int
 	wakeLeaderCond *sync.Cond
 	killedChan chan struct{}
+	applyCh   chan ApplyMsg
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -91,6 +92,9 @@ type Raft struct {
 	timeToTimeOut time.Time
 	logger raftlogs.Logger
 	role int  //FOLLOWER = 0, CANDIDATE = 1, LEADER = 2
+	highestCommitedIndex int
+	lastApplied int
+
 	majority int
 	votes int
 
@@ -218,6 +222,9 @@ type AppendEntryReply struct {
 	// Your data here (2A).
 	Term int //currentTerm, for leader to update itself
 	Success bool //true if follower contained entry matching prevLogIndex and prevLogTerm
+	NextIndex int //next
+	RejectedByTerm bool
+
 }
 
 //
@@ -281,19 +288,92 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 }
 
-func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply){
-	rf.logger.Log(raftlogs.DInfo, "S%d received appendEntry from leader S%d",
-				rf.me, args.LeaderId)
-	rf.mu.Lock()
-	if args.Term > rf.currentTerm {
-		rf.logger.Log(raftlogs.DInfo, 
-			"S%d is no longer a leader for the term %d, since S%d is now the leader for the term %d",
-		rf.me, rf.currentTerm, args.LeaderId, args.Term)
-		rf.followerToFollowerWithHigherTermWithLock(args.Term)
-	}
-	rf.mu.Unlock()
 
-	rf.initTimeOut()
+//hold lock
+func (rf *Raft) appendOneLogEntry(logEntry LogEntry){
+	rf.lastLogIndex++
+	rf.logs = append(rf.logs, logEntry)
+	rf.logger.Log(raftlogs.DLog, "S%d appended log num %d to its logs", rf.me, rf.lastLogIndex)
+}
+
+
+func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply){
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	defer func() {reply.Term = rf.currentTerm}()	
+	defer rf.initTimeOut()
+
+	leaderSendLastIndex := args.PrevLogIndex + len(args.Entries)
+
+	if len(args.Entries) == 0 {
+		rf.logger.Log(raftlogs.DLog, "S%d with term %d recv term %d append []\n", rf.me, rf.currentTerm,
+			args.Term)
+	} else if len(args.Entries) == 1 {
+		rf.logger.Log(raftlogs.DLog, "S%d with term %d recv term %d append [%d]\n", rf.me, rf.currentTerm,
+			args.Term,
+			args.PrevLogIndex+1)
+	} else {
+		rf.logger.Log(raftlogs.DLog, "S%d with term %d recv term %d append [%d->%d]\n", rf.me, rf.currentTerm,
+			args.Term,
+			args.PrevLogIndex+1, leaderSendLastIndex)
+	}
+
+	reply.Success = false
+	reply.RejectedByTerm = false
+	//Reply false if term < currentTerm
+	if args.Term < rf.currentTerm{
+		reply.RejectedByTerm = true
+		return
+	}
+
+	if args.Term > rf.currentTerm {
+		rf.followerToFollowerWithHigherTermWithLock(args.Term)
+	}else{
+		//I am a follower 
+		rf.role = FOLLOWER
+	}
+
+	reply.NextIndex = leaderSendLastIndex + 1
+	if args.PrevLogIndex > rf.lastLogIndex{
+		//my logs are too short
+		rf.logger.Log(raftlogs.DLog, "S%d's logs are less than the leader's, %d is greater than my %d",
+				rf.me, args.PrevLogIndex, rf.lastLogIndex)
+	}
+
+	//Reply false if log doesn’t contain an entry at prevLogIndex
+	//whose term matches prevLogTerm
+	if rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+		rf.logger.Log(raftlogs.DLog, "S%d has found a conflict#################", rf.me)
+		return
+	}
+
+
+	reply.Success = true
+	reply.NextIndex = leaderSendLastIndex + 1
+	if leaderSendLastIndex <= rf.lastApplied {
+		rf.logger.Log(raftlogs.DLog, "S%d term %d log %d already applied", rf.me,
+					rf.currentTerm, leaderSendLastIndex)	
+		return
+	}
+
+	//If an existing entry conflicts with a new one (same index
+	// but different terms), delete the existing entry and all that
+	// follow it
+
+	scanFrom := args.PrevLogIndex + 1
+	scanEnd := rf.lastLogIndex
+
+	//already have alot of entries
+	if scanEnd > leaderSendLastIndex {
+		scanEnd = leaderSendLastIndex
+	}
+
+	for scanFrom <= scanEnd {
+
+	}
+
+
+
 }
 
 
@@ -313,6 +393,7 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply){
 // term. the third return value is true if this server believes it is
 // the leader.
 //
+
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1	
@@ -322,6 +403,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	term = rf.currentTerm
 	isLeader = rf.role == LEADER
+	index = rf.me
 	if !isLeader || rf.killed(){
 		rf.mu.Unlock()
 		return 0, term, false
@@ -335,16 +417,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Term: term,
 	})
 
+	rf.wakeLeaderCond.Broadcast() //wake up leader to send entries to the followers
 	rf.mu.Unlock()
 
 	return index, term, isLeader
-}
-
-//hold lock
-func (rf *Raft) appendOneLogEntry(logEntry LogEntry){
-	rf.lastLogIndex++
-	rf.logs = append(rf.logs, logEntry)
-	rf.logger.Log(raftlogs.DLog, "S%d appended log num %d to its logs", rf.me, rf.lastLogIndex)
 }
 
 func (rf *Raft) followerToFollowerWithHigherTermWithLock(term int){
@@ -403,6 +479,7 @@ func (rf *Raft) ticker() {
 			rf.logger.Log(raftlogs.DDrop, "S%d has finally died", rf.me)
 			rf.mu.Lock()
 			killed = true
+			rf.logger.Log(raftlogs.DLog, "S%d logs len is %v", rf.me, len(rf.logs))
 			rf.mu.Unlock()
 	}()
 	for {
@@ -455,6 +532,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 
 	rf.mu = sync.Mutex{}
+	rf.applyCh = applyCh
 	rf.currentTerm = 0	
 	rf.peerCnt = len(peers)
 	rf.votedFor = -1
