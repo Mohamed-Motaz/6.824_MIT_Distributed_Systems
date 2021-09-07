@@ -455,7 +455,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cmd = cmd1
 		}
 	}
-	fmt.Printf("This is the count %d\n", count)
+	//fmt.Printf("This is the count %d\n", count)
 	return count, cmd
 }
 

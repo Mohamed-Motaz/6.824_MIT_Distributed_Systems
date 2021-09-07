@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -8,9 +9,16 @@ import (
 )
 
 
+func (rf *Raft) AssertTrue(test bool, format string, a ...interface{}) {
+	if !test {
+		panic(fmt.Sprintf(fmt.Sprintf("S%d ", rf.me)+format, a...))
+	}
+}
+
 func getRandomElectionTimeout() time.Duration {
 	return time.Duration(rand.Int())%RANDOM_PLUS + ELECTION_TIMEOUT
 }
+
 
 func (rf *Raft) checkTimeOut() bool {
 	rf.timerMuLock.Lock()
@@ -21,18 +29,24 @@ func (rf *Raft) checkTimeOut() bool {
 func (rf *Raft) sleepTimeOut() {
 	rf.timerMuLock.Lock()
 	timeToTimeOut := rf.timeToTimeOut
+	rf.timerMuLock.Unlock()	
 	now := time.Now()
-	rf.timerMuLock.Unlock()
 	if (timeToTimeOut.After(now)){
 			time.Sleep(timeToTimeOut.Sub(now))
 
 	}
 }
+func (rf *Raft) freshTimer() {
+	rf.timerMuLock.Lock()
+	defer rf.timerMuLock.Unlock()
+	rf.timeToTimeOut = time.Now().Add(getRandomElectionTimeout())
+}
 func (rf *Raft) initTimeOut(){
 	rf.timerMuLock.Lock()
 	defer rf.timerMuLock.Unlock()
-	totalTime := getRandomElectionTimeout();
+	totalTime := time.Duration(rand.Int())%RANDOM_PLUS + time.Millisecond*100
 	rf.timeToTimeOut = time.Now().Add(totalTime)
+
 	rf.logger.Log(raftlogs.DTimer, 
 		"S%d just re-initialized the timeout from the current time %d to the time %d for a total timeout of %d",
 	    rf.me, time.Now().UnixNano()/1e6, rf.timeToTimeOut.UnixNano()/1e6, totalTime)
@@ -41,7 +55,7 @@ func (rf *Raft) initTimeOut(){
 
 func checkCandidatesLogIsNew(selfTerm int, otherTerm int, selfIdx int, otherIdx int) bool{
 	if (selfTerm != otherTerm){
-		return otherTerm > selfIdx
+		return otherTerm > selfTerm
 	}
 	return otherIdx >= selfIdx
 }

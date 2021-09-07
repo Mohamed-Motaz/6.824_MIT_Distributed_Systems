@@ -9,14 +9,14 @@ func (rf *Raft) doWorkBeforeTransitioningToLeader(){
 	rf.logger.Log(raftlogs.DLeader, 
 		"S%d just become leader for the term %d",
 		rf.me, rf.currentTerm)
-	for i := 0; i < rf.peerCnt && !rf.killed(); i++{
+	for i := 0; i < rf.peerCnt ; i++{
 		rf.nextIndex[i] = rf.lastLogIndex + 1
 		rf.matchIndex[i] = 0
 	}
 }
 
 func (rf *Raft) doCandidateWork(term int, args *RequestVoteArgs){
-	for i := 0; i < rf.peerCnt && !rf.killed(); i++ {
+	for i := 0; i < rf.peerCnt ; i++ {
 		if i != rf.me {
 			go func(peer int) {
 				reply := &RequestVoteReply{
@@ -30,7 +30,7 @@ func (rf *Raft) doCandidateWork(term int, args *RequestVoteArgs){
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				if ok && reply.Term > rf.currentTerm{
-					rf.candidateToFollowerBecauseOfHigherTermWithLock(reply.Term)
+					rf.followerToFollowerWithHigherTermWithLock(reply.Term)
 					return
 				}
 
