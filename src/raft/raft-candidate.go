@@ -69,6 +69,9 @@ func (rf *Raft) newElection(){
 	rf.votedFor = rf.me
 	rf.role = CANDIDATE
 	term  := rf.currentTerm
+
+	rf.persist()
+
 	args := &RequestVoteArgs{
 		Term: rf.currentTerm,
 		CandidateId: rf.me,

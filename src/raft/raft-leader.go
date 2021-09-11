@@ -150,25 +150,12 @@ func getKth(c []int, k int) int {
 	return c[k]
 }
 func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
-	// if isAppend {
-	// 	rf.logger.L(logger.Leader, "term %d leader append ok to S%d,nextIndex %d\n",
-	// 		rf.currentTerm, peer, nextIndex)
-	// } else {
-	// 	rf.logger.L(logger.Leader, "term %d leader install ok to S%d,nextIndex %d\n",
-	// 		rf.currentTerm, peer, nextIndex)
-	// }
+
 
 	rf.AssertTrue(rf.nextIndex[peer] > rf.matchIndex[peer], "term %d for S%d next %d match %d\n",
 		rf.currentTerm, peer, rf.nextIndex[peer], rf.matchIndex[peer])
 
-	// if rf.matchIndex[peer] > nextIndex-1 {
-	// 	rf.logger.L(logger.Leader, "term %d leader reject append ok: next %d, match %d\n ",
-	// 		rf.currentTerm, nextIndex, rf.matchIndex[peer])
-	// 	return
-	// } else if rf.matchIndex[peer] == nextIndex-1 {
-	// 	rf.logger.L(logger.Leader, "term %d leader recv S%d heart %d[] reply\n",
-	// 		rf.currentTerm, peer, nextIndex-1)
-	// }
+
 
 	rf.nextIndex[peer] = nextIndex
 	rf.matchIndex[peer] = nextIndex - 1
@@ -183,9 +170,7 @@ func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
 
 	if major_match > rf.lastLogIndex {
 
-		// rf.logger.L(logger.Leader, "term:%d , major_match:%d  > lastLogIndex:%d, S%d  matchIndex:%d nextIndex:%d->%d\n",
-		// 	rf.currentTerm, major_match, rf.lastLogIndex, peer, rf.matchIndex,
-		// 	rf.nextIndex, nextIndex)
+		
 
 		panic("leader")
 	}
@@ -193,14 +178,6 @@ func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
 	//try to commit
 	if major_match > rf.highestCommitedIndex &&
 		rf.logs[major_match].Term == rf.currentTerm {
-
-		// if major_match == rf.highestCommitedIndex+1 {
-		// 	rf.logger.L(logger.Commit, "term %d leader commit [%d]\n",
-		// 		rf.currentTerm, major_match)
-		// } else {
-		// 	rf.logger.L(logger.Commit, "term %d leader commit [%d->%d]\n",
-		// 		rf.currentTerm, rf.highestCommitedIndex+1, major_match)
-		// }
 
 		rf.highestCommitedIndex = major_match
 		rf.applyCond.Signal()

@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,20 +125,30 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isleader
 }
 
+func (rf *Raft) getRaftState() []byte{
+	//get the current raft state
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	//fmt.Println(tmp);
+	e.Encode(rf.votedFor)
+	//fmt.Println(tmp);
+	e.Encode(rf.lastLogIndex)  //for the logs
+	//fmt.Println(tmp);
+	e.Encode(rf.logs)
+	//fmt.Println(tmp);
+	return w.Bytes()
+}
+
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	rf.persister.SaveRaftState(rf.getRaftState())
+	rf.logger.Log(raftlogs.DLog, "S%d called persist", rf.me);
+	rf.readPersist(rf.persister.ReadRaftState())
 }
 
 
@@ -148,19 +159,32 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm, votedFor, lastLogIndex int
+
+	if d.Decode(&currentTerm) != nil {
+		rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 1 1", rf.me)
+	}else if d.Decode(&votedFor) != nil{
+		rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 1 2", rf.me)
+	}else if d.Decode(&lastLogIndex) != nil{
+		rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 1 3", rf.me)
+	} else {
+		var logs []LogEntry = make([]LogEntry, lastLogIndex)
+		if d.Decode(&logs) != nil{
+			rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 2", rf.me)
+		}else{
+			rf.currentTerm = currentTerm
+			rf.votedFor = votedFor
+			rf.lastLogIndex = lastLogIndex
+			rf.logs = logs
+			rf.highestCommitedIndex = 0
+			rf.lastApplied = 0
+			rf.logger.Log(raftlogs.DLog, "S%d successsully restored its logs", rf.me)
+
+		}
+
+	}
 }
 
 
@@ -228,9 +252,9 @@ type AppendEntryReply struct {
 	RejectedByTerm bool
 
 	//Optimization for decision of rollback in case of conflicts
-	ConflictIndex int
-	ConflictTerm int
-	ConflictLen int
+	ConflictIndex int    //index of first entry in term of conflict
+	ConflictTerm int      //index of term of conflict
+	ConflictLen int   //length of whole l
 
 }
 
@@ -280,6 +304,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 		rf.freshTimer()
 		rf.votedFor = args.CandidateId
+		rf.persist()
 	}else{
 		reply.VoteGranted = false
 		if rf.votedFor == -1 {
@@ -302,6 +327,7 @@ func (rf *Raft) appendOneLogEntry(logEntry LogEntry){
 	rf.lastLogIndex++
 	rf.logs = append(rf.logs, logEntry)
 	rf.logger.Log(raftlogs.DLog, "S%d appended log num %d to its logs", rf.me, rf.lastLogIndex)
+	rf.persist()
 }
 
 func (rf *Raft) appendManyLogs(logEntries []LogEntry){
@@ -309,6 +335,7 @@ func (rf *Raft) appendManyLogs(logEntries []LogEntry){
 	rf.logs = append(rf.logs, logEntries...)
 	rf.logger.Log(raftlogs.DLog, "S%d appended from %d to %d", 
 	rf.me, rf.lastLogIndex - len(logEntries), rf.lastLogIndex)
+	rf.persist()
 }
 
 func (rf *Raft) findTermsFirstIndex(from int) int {
@@ -464,6 +491,7 @@ func (rf *Raft) deleteTailLogs(scanFrom int){
 				
 	rf.logs = append([]LogEntry{}, rf.logs[:scanFrom]...)			
 	rf.lastLogIndex = scanFrom - 1
+	rf.persist()
 }
 
 
@@ -477,13 +505,6 @@ func (rf *Raft) applyLogs(){
 			length := rf.highestCommitedIndex - rf.lastApplied
 			applyMsgs := make([]*ApplyMsg, length)
 
-			// if length == 1 {
-			// 	rf.logger.L(logger.Apply, "term %d apply [%d]\n",
-			// 		rf.currentTerm, rf.commitIndex)
-			// } else {
-			// 	rf.logger.L(logger.Apply, "term %d apply [%d->%d]\n",
-			// 		rf.currentTerm, rf.lastApplied+1, rf.commitIndex)
-			// }
 
 			for i := 0; i < length; i++ {
 				rf.lastApplied++
@@ -493,6 +514,12 @@ func (rf *Raft) applyLogs(){
 					Command:       rf.logs[rf.lastApplied].Command,
 					CommandIndex:  rf.lastApplied,
 				}
+				rf.logger.Log(raftlogs.DLog, "S%d about to commit this %v at %v", rf.me, applyMsgs[i].Command, applyMsgs[i].CommandIndex);
+
+			}
+			for i := 0; i <= rf.highestCommitedIndex; i++{
+				rf.logger.Log(raftlogs.DLog, "S%d here are my commits:  %v at %v", rf.me, rf.logs[i].Command, i);
+
 			}
 			rf.mu.Unlock()
 
@@ -547,12 +574,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.mu.Unlock()
 
-	go func() {
-		//hang on a while, there might be several Start() calls after this
-		//one signal is enough for all Start() calls
-		time.Sleep(3 * time.Millisecond)
-		rf.wakeLeaderCond.Broadcast()
-	}()
+
+	rf.wakeLeaderCond.Broadcast()
+	
 	return index, term, true
 }
 
@@ -564,7 +588,7 @@ func (rf *Raft) followerToFollowerWithHigherTermWithLock(term int){
 	rf.votedFor = -1
 	rf.currentTerm = term
 	rf.votes = 0
-
+	rf.persist()
 }
 
 
@@ -647,7 +671,6 @@ func (rf *Raft) ticker() {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	labgob.Register(LogEntry{})
-
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
@@ -655,6 +678,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peerCnt = len(peers)
 
     rf.logger.Log(raftlogs.DTimer, "S%d just came to life ", rf.me);
+
 	// Your initialization code here (2A, 2B, 2C).
 
 	rf.mu = sync.Mutex{}
@@ -678,12 +702,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, len(peers))
 	rf.wakeLeaderCond = sync.NewCond(&rf.mu)
 	rf.applyCond = sync.NewCond(&rf.mu)
-	rf.initTimeOut()
+	rf.initTimeOut()   //less than freshTimeout
 
 	// initialize from state persisted before a crash
+	// fmt.Println(persister.ReadRaftState())
 	rf.readPersist(persister.ReadRaftState())
+	rf.logger.Log(raftlogs.DLog, "S%d logs len is %v", rf.me, len(rf.logs))
 
-//start a thread to wait for signals and applyLogs
+	//start a thread to wait for signals and applyLogs
 	go rf.applyLogs()
 	// start ticker goroutine to start elections
 	go rf.ticker()

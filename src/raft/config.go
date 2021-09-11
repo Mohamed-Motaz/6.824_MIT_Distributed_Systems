@@ -163,13 +163,18 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 		if m.CommandValid == false {
 			// ignore other types of ApplyMsg
 		} else {
+			// fmt.Printf("applier see log %v\n", m.Command)
+
 			cfg.mu.Lock()
 			err_msg, prevok := cfg.checkLogs(i, m)
+			// fmt.Printf("applier see log %v %v\n", err_msg, prevok)
+
 			cfg.mu.Unlock()
 			if m.CommandIndex > 1 && prevok == false {
 				err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
 			}
 			if err_msg != "" {
+				log.Println("oops")
 				log.Fatalf("apply error: %v\n", err_msg)
 				cfg.applyErr[i] = err_msg
 				// keep reading after error so that Raft doesn't block
