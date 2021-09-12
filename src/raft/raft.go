@@ -112,6 +112,16 @@ type Raft struct {
 	lastLogIndex int
 }
 
+type InstallSnapshotArgs struct {
+	Term int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Snap []byte
+}
+type InstallSnapshotReply struct {
+	Term int
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -205,6 +215,13 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.logger.Log(raftlogs.DSnap, 
+		"S%d server recieved s snapshot from to index %d, and the logs will be from %d to %d",
+		rf.me, index, index + 1, rf.lastLogIndex)
+
 
 }
 
