@@ -51,7 +51,7 @@ func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
 						Term: leaderTerm,
 						LeaderId: rf.me,
 						PrevLogIndex: rf.lastLogIndex,
-						PrevLogTerm: rf.logs[rf.lastLogIndex].Term,
+						PrevLogTerm: rf.logs[rf.lastLogIndex-rf.offset].Term,
 						Entries: rf.logs[0:0],
 						LeaderCommit: rf.highestCommitedIndex,
 					}
@@ -77,7 +77,7 @@ func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
 						rf.logger.Log(raftlogs.DLeader, "S%d has no entries to send, so only sending hearbeats", rf.me)
 						//send a heartbeat
 						prevLogIndex := rf.nextIndex[peer] - 1
-						prevLogTerm := rf.logs[prevLogIndex].Term
+						prevLogTerm := rf.logs[prevLogIndex-rf.offset].Term
 						if prevLogIndex != rf.lastLogIndex{
 							rf.logger.Log(raftlogs.DLeader, 
 								"S%d has a problem his prevLogIdx is %d and mine is %d",
@@ -96,12 +96,19 @@ func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
 							leaderTerm, peer, rf.nextIndex[peer], rf.matchIndex[peer])
 
 						prevLogIndex := rf.nextIndex[peer] - 1
-						prevLogTerm := rf.logs[prevLogIndex].Term
-						args := &AppendEntryArgs{
-							Term: leaderTerm, LeaderId: rf.me, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm,
-							Entries: rf.logs[prevLogIndex + 1: ], LeaderCommit: rf.highestCommitedIndex,
+						if prevLogIndex < rf.offset{
+							//need to send a snapshot
+							arg := InstallSnapshotArgs{Term: leaderTerm, LastIncludedIndex: rf.offset, LastIncludedTerm: rf.logs[0].Term, Data: rf.snapshot}
+							go rf.doInstallRPC(peer, leaderTerm, &arg)
+						}else{
+							prevLogTerm := rf.logs[prevLogIndex-rf.offset].Term
+							args := &AppendEntryArgs{
+								Term: leaderTerm, LeaderId: rf.me, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm,
+								Entries: rf.logs[prevLogIndex + 1-rf.offset: ], LeaderCommit: rf.highestCommitedIndex,
+							}
+							go rf.doAppendRPC(peer, leaderTerm, args)
 						}
-						go rf.doAppendRPC(peer, leaderTerm, args)
+						
 					}
 					
 					// rf.logger.Log(raftlogs.DLeader, "S%d sending append entries to S%d", rf.me, peer)
@@ -177,7 +184,7 @@ func (rf *Raft) appendOkAsLeader(nextIndex, peer int, isAppend bool) {
 
 	//try to commit
 	if major_match > rf.highestCommitedIndex &&
-		rf.logs[major_match].Term == rf.currentTerm {
+		rf.logs[major_match-rf.offset].Term == rf.currentTerm {
 
 		rf.highestCommitedIndex = major_match
 		rf.applyCond.Signal()
@@ -254,10 +261,10 @@ func (rf *Raft) hasTermAndLastIndex(conflictTerm int) (bool, int) {
 	i := rf.lastLogIndex
 	has := false
 
-	for i > 0 {
-		if rf.logs[i].Term == conflictTerm{
+	for i > rf.offset {
+		if rf.logs[i-rf.offset].Term == conflictTerm{
 			has = true
-		}else if rf.logs[i].Term < conflictTerm {
+		}else if rf.logs[i-rf.offset].Term < conflictTerm {
 			break
 		}
 		i--
@@ -267,4 +274,39 @@ func (rf *Raft) hasTermAndLastIndex(conflictTerm int) (bool, int) {
 		return false, -1
 	}
 	return true, i + 1 
+}
+
+func (rf *Raft) doInstallRPC(peer, term int, args *InstallSnapshotArgs) {
+
+	reply := InstallSnapshotReply{
+		Term: 0,
+	}
+
+	
+	ok := rf.sendInstallSnapshot(peer, args, &reply)
+	if !ok || rf.killed() {
+		return
+	}
+
+	rf.checkInstallRPC(term, peer, args.LastIncludedIndex+1, &reply)
+
+}
+
+//check reply result
+func (rf *Raft) checkInstallRPC(term, peer, nextIndex int, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if reply.Term > rf.currentTerm {
+		rf.followerToFollowerWithHigherTermWithLock(reply.Term)
+		return
+	}
+
+	if rf.currentTerm != term || rf.role != LEADER || reply.Term < rf.currentTerm {
+		return
+	}
+	if nextIndex <= rf.matchIndex[peer] {
+		return
+	}
+	rf.nextIndex[peer] = nextIndex
 }

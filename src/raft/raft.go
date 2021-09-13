@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 
 	"bytes"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,6 +84,8 @@ type Raft struct {
 	killedChan chan struct{}
 	applyCh   chan ApplyMsg
 	applyCond *sync.Cond
+	snapshot []byte
+	offset int   //so can access logs properly after recieving a snapshot
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -114,9 +117,10 @@ type Raft struct {
 
 type InstallSnapshotArgs struct {
 	Term int
+	LeaderId int
 	LastIncludedIndex int
-	LastIncludedTerm  int
-	Snap []byte
+	LastIncludedTerm int
+	Data []byte
 }
 type InstallSnapshotReply struct {
 	Term int
@@ -142,6 +146,7 @@ func (rf *Raft) getRaftState() []byte{
 	e.Encode(rf.currentTerm)
 	//fmt.Println(tmp);
 	e.Encode(rf.votedFor)
+	e.Encode(rf.offset)
 	//fmt.Println(tmp);
 	e.Encode(rf.lastLogIndex)  //for the logs
 	//fmt.Println(tmp);
@@ -157,8 +162,7 @@ func (rf *Raft) getRaftState() []byte{
 //
 func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(rf.getRaftState())
-	rf.logger.Log(raftlogs.DLog, "S%d called persist", rf.me);
-	rf.readPersist(rf.persister.ReadRaftState())
+	rf.logger.Log(raftlogs.DPersist, "S%d called persist", rf.me);
 }
 
 
@@ -171,16 +175,15 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
-	var currentTerm, votedFor, lastLogIndex int
+	var currentTerm, votedFor, offset, lastLogIndex int
 
-	if d.Decode(&currentTerm) != nil {
-		rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 1 1", rf.me)
-	}else if d.Decode(&votedFor) != nil{
-		rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 1 2", rf.me)
-	}else if d.Decode(&lastLogIndex) != nil{
-		rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 1 3", rf.me)
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&offset) != nil ||
+		d.Decode(&lastLogIndex) != nil{
+		rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 1", rf.me)
 	} else {
-		var logs []LogEntry = make([]LogEntry, lastLogIndex)
+		var logs []LogEntry = make([]LogEntry, lastLogIndex-rf.offset)
 		if d.Decode(&logs) != nil{
 			rf.logger.Log(raftlogs.DError, "S%d failed in decoding the state 2", rf.me)
 		}else{
@@ -188,8 +191,9 @@ func (rf *Raft) readPersist(data []byte) {
 			rf.votedFor = votedFor
 			rf.lastLogIndex = lastLogIndex
 			rf.logs = logs
-			rf.highestCommitedIndex = 0
-			rf.lastApplied = 0
+			rf.offset = offset
+			rf.highestCommitedIndex = rf.offset
+			rf.lastApplied = rf.offset
 			rf.logger.Log(raftlogs.DLog, "S%d successsully restored its logs", rf.me)
 
 		}
@@ -205,8 +209,55 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	if rf.lastApplied >= lastIncludedIndex{
+		return false
+	}
+
+	rf.doPersistAndSnap(lastIncludedIndex, lastIncludedTerm, snapshot)
 	return true
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	//server recieves a snapshot from leader
+	defer func() {reply.Term = rf.currentTerm}()
+
+	rf.logger.Log(raftlogs.DSnap, "S%d term %d recv term %d installSnap:%d, myLast:%d\n",
+		rf.me, rf.currentTerm, args.Term, args.LastIncludedIndex, rf.lastLogIndex)
+	
+	if args.Term < rf.currentTerm{
+		return
+	}
+	if args.Term > rf.currentTerm {
+		rf.followerToFollowerWithHigherTermWithLock(args.Term)
+	}
+	rf.role = FOLLOWER
+	rf.freshTimer()
+
+	reply.Term = rf.currentTerm
+	if rf.lastApplied >= args.LastIncludedIndex {
+
+		rf.logger.Log(raftlogs.DSnap, "S%d ignore install index %d for applied %d\n",
+			rf.me, rf.lastApplied, args.LastIncludedIndex)
+		return
+	}
+
+	go func(){
+		rf.applyCh <- ApplyMsg{
+			CommandValid:  false,
+			SnapshotValid: true,
+			Snapshot:      args.Data,
+			SnapshotTerm:  args.LastIncludedTerm,
+			SnapshotIndex: args.LastIncludedIndex,
+		}
+	}()
+
+
 }
 
 // the service says it has created a snapshot that has
@@ -219,12 +270,40 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	defer rf.mu.Unlock()
 
 	rf.logger.Log(raftlogs.DSnap, 
-		"S%d server recieved s snapshot from to index %d, and the logs will be from %d to %d",
+		"S%d server recieved a snapshot from to index %d, and the logs will be from %d to %d",
 		rf.me, index, index + 1, rf.lastLogIndex)
-
+	
+	rf.doPersistAndSnap(index, rf.logs[index - rf.offset].Term, snapshot)
 
 }
 
+//hold lock
+func (rf *Raft) doPersistAndSnap(index int, term int, snapshot []byte){
+
+	rf.highestCommitedIndex = int(math.Max(float64(rf.highestCommitedIndex), float64(index)))
+	rf.lastApplied = int(math.Max(float64(rf.lastApplied), float64(index)))
+
+	lengthAfterTrimming := rf.lastLogIndex - index + 1
+
+	if lengthAfterTrimming < 1 {
+		rf.logs = make([]LogEntry, 1)
+	}else{
+		rf.logs = append([]LogEntry{}, rf.logs[index - rf.offset: ]...)
+	}
+
+	rf.lastLogIndex = int(math.Max(float64(index), float64(rf.lastLogIndex)))
+	rf.logs[0].Term = term
+	rf.logs[0].Command = nil
+
+
+	rf.offset = index
+	rf.snapshot = snapshot
+
+	rf.persister.SaveStateAndSnapshot(rf.getRaftState(), snapshot)
+
+	rf.logger.Log(raftlogs.DSnap, "S%d raft apply snapshot offset %d ,lastApplied %d,total log %d, size %d,log cap:%d\n",
+		rf.me, index, rf.lastApplied, rf.lastLogIndex, len(rf.getRaftState()), cap(rf.logs))
+}
 
 //
 // example RequestVote RPC arguments structure.
@@ -310,7 +389,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	reply.Term = rf.currentTerm
 	myIdx := rf.lastLogIndex
-	myLastTerm := rf.logs[rf.lastLogIndex].Term
+	myLastTerm := rf.logs[rf.lastLogIndex - rf.offset].Term
 	if rf.votedFor == args.CandidateId || (
 		rf.votedFor == -1 && checkCandidatesLogIsNew(myLastTerm, args.LastLogTerm,
 											myIdx, args.LastLogIndex)){
@@ -357,17 +436,17 @@ func (rf *Raft) appendManyLogs(logEntries []LogEntry){
 
 func (rf *Raft) findTermsFirstIndex(from int) int {
 	i := from - 1
-	term := rf.logs[from].Term
-	for i > 0 {
-		if rf.logs[i].Term != term {
+	term := rf.logs[from-rf.offset].Term
+	for i > rf.offset {
+		if rf.logs[i-rf.offset].Term != term {
 			break
 		}
 		i--
 	}
 	i++
-	rf.AssertTrue(i >= 0 && rf.logs[i].Term == rf.logs[from].Term,
+	rf.AssertTrue(i >= rf.offset && rf.logs[i-rf.offset].Term == rf.logs[from-rf.offset].Term,
 		"must equal,found i:%d Term:%d, from i:%d, Term:%d\n",
-		i, rf.logs[i].Term, from, rf.logs[from].Term)
+		i, rf.logs[i-rf.offset].Term, from, rf.logs[from-rf.offset].Term)
 	return i
 }
 
@@ -422,16 +501,16 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply){
 
 	//Reply false if log doesn’t contain an entry at prevLogIndex
 	//whose term matches prevLogTerm
-	if args.PrevLogIndex > 0 && rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
+	if args.PrevLogIndex > rf.offset && rf.logs[args.PrevLogIndex-rf.offset].Term != args.PrevLogTerm {
 		// when rejecting an AppendEntries request, the follower
 		// can include the term of the conflicting entry and the first
 		// index it stores for that term
 		rf.logger.Log(raftlogs.DLog, 
 		  "S%d has found a conflict#################  it rejects leader's S%d term %d pre[t%d, i%d], for last log's term: %d i: %d",
-		 rf.me, args.LeaderId, args.Term, args.PrevLogTerm, args.PrevLogTerm, rf.logs[rf.lastLogIndex].Term, rf.lastLogIndex)
+		 rf.me, args.LeaderId, args.Term, args.PrevLogTerm, args.PrevLogTerm, rf.logs[rf.lastLogIndex-rf.offset].Term, rf.lastLogIndex)
 		
 		//optimization mentioned in the paper
-		reply.ConflictTerm = rf.logs[args.PrevLogIndex].Term
+		reply.ConflictTerm = rf.logs[args.PrevLogIndex-rf.offset].Term
 		reply.ConflictLen = rf.lastLogIndex + 1
 		reply.ConflictIndex = rf.findTermsFirstIndex(args.PrevLogIndex)
 	
@@ -458,9 +537,12 @@ func (rf *Raft) AppendEntry(args *AppendEntryArgs, reply *AppendEntryReply){
 	if scanEnd > leaderSendLastIndex {
 		scanEnd = leaderSendLastIndex
 	}
+	if scanFrom <= rf.offset{
+		scanFrom = rf.offset + 1
+	}
 
 	for scanFrom <= scanEnd {
-		if rf.logs[scanFrom].Term != args.Entries[scanFrom - args.PrevLogIndex - 1].Term{
+		if rf.logs[scanFrom-rf.offset].Term != args.Entries[scanFrom - args.PrevLogIndex - 1].Term{
 			//need to delete all tail logs
 			rf.deleteTailLogs(scanFrom)
 			break
@@ -506,7 +588,7 @@ func (rf *Raft) deleteTailLogs(scanFrom int){
 	rf.logger.Log(raftlogs.DLog, "S%d about to delete logs from %d to %d",
 				rf.me, scanFrom, rf.lastLogIndex)
 				
-	rf.logs = append([]LogEntry{}, rf.logs[:scanFrom]...)			
+	rf.logs = append([]LogEntry{}, rf.logs[:scanFrom - rf.offset]...)			
 	rf.lastLogIndex = scanFrom - 1
 	rf.persist()
 }
@@ -528,16 +610,13 @@ func (rf *Raft) applyLogs(){
 				applyMsgs[i] = &ApplyMsg{
 					CommandValid:  true,
 					SnapshotValid: false,
-					Command:       rf.logs[rf.lastApplied].Command,
+					Command:       rf.logs[rf.lastApplied-rf.offset].Command,
 					CommandIndex:  rf.lastApplied,
 				}
 				rf.logger.Log(raftlogs.DLog, "S%d about to commit this %v at %v", rf.me, applyMsgs[i].Command, applyMsgs[i].CommandIndex);
 
 			}
-			for i := 0; i <= rf.highestCommitedIndex; i++{
-				rf.logger.Log(raftlogs.DLog, "S%d here are my commits:  %v at %v", rf.me, rf.logs[i].Command, i);
 
-			}
 			rf.mu.Unlock()
 
 			for _, msg := range applyMsgs {
@@ -706,6 +785,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.highestCommitedIndex = 0
 	rf.lastApplied = 0
 	rf.logs = make([]LogEntry, 1)
+	rf.offset = 0
+	rf.snapshot = persister.ReadSnapshot()
 
 	rf.killedChan = make(chan struct{})
 	rf.majority = (len(peers) + 1) / 2;

@@ -76,7 +76,7 @@ func (rf *Raft) newElection(){
 		Term: rf.currentTerm,
 		CandidateId: rf.me,
 		LastLogIndex: rf.lastLogIndex,
-		LastLogTerm: rf.logs[rf.lastLogIndex].Term,
+		LastLogTerm: rf.logs[rf.lastLogIndex-rf.offset].Term,
 	}	
 	rf.mu.Unlock()
 
