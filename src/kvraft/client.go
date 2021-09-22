@@ -1,13 +1,19 @@
 package kvraft
 
-import "6.824/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+
+	"6.824/labrpc"
+	raftlogs "6.824/raft-logs"
+)
 
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	logger raftlogs.Logger
+	id int
 }
 
 func nrand() int64 {
@@ -21,6 +27,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	
 	return ck
 }
 
@@ -57,8 +64,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 }
 
 func (ck *Clerk) Put(key string, value string) {
+	ck.logger.Log(raftlogs.DLeader, "S%d was called with a put of %v with %v", ck.id, key, value)
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
+	ck.logger.Log(raftlogs.DLeader, "S%d was called with an append of %v with %v", ck.id, key, value)
 	ck.PutAppend(key, value, "Append")
 }

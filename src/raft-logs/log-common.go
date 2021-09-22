@@ -69,3 +69,18 @@ func (lg *Logger ) Log(topic logTopic, format string, a ...interface{}) {
 		log.Printf(format, a...)
 	}
 }
+
+// //run only when verbose=-1
+// func (lg *Logger ) L(topic logTopic, format string, a ...interface{}) {
+// 	if debugVerbosity == -1 {
+// 		 initDebugger();
+// 	}
+	
+// 	if debug == -1 && debugVerbosity == -1 {
+// 		time := time.Since(debugStart).Microseconds()
+// 		time /= 100
+// 		prefix := fmt.Sprintf("%06d %v ", time, string(topic))
+// 		format = prefix + format
+// 		log.Printf(format, a...)
+// 	}
+// }

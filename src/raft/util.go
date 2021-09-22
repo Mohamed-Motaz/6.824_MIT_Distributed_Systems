@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
-
-	raftlogs "6.824/raft-logs"
 )
 
 
@@ -47,9 +45,9 @@ func (rf *Raft) initTimeOut(){
 	totalTime := time.Duration(rand.Int())%RANDOM_PLUS + time.Millisecond*100
 	rf.timeToTimeOut = time.Now().Add(totalTime)
 
-	rf.logger.Log(raftlogs.DTimer, 
-		"S%d just re-initialized the timeout from the current time %d to the time %d for a total timeout of %d",
-	    rf.me, time.Now().UnixNano()/1e6, rf.timeToTimeOut.UnixNano()/1e6, totalTime)
+	// rf.logger.Log(raftlogs.DTimer, 
+	// 	"S%d just re-initialized the timeout from the current time %d to the time %d for a total timeout of %d",
+	//     rf.me, time.Now().UnixNano()/1e6, rf.timeToTimeOut.UnixNano()/1e6, totalTime)
 }
 
 

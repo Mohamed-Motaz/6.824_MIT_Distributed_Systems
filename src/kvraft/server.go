@@ -1,12 +1,14 @@
 package kvraft
 
 import (
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
 	"log"
 	"sync"
 	"sync/atomic"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
+	raftlogs "6.824/raft-logs"
 )
 
 const Debug = false
@@ -31,6 +33,8 @@ type KVServer struct {
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
+	logger raftlogs.Logger
+
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -85,9 +89,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-
+	
 	kv := new(KVServer)
-	kv.me = me
+	kv.me = me 
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
@@ -96,6 +100,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-
+	kv.logger.Log(raftlogs.DLeader, "S%d is now alive", kv.me)
 	return kv
 }
