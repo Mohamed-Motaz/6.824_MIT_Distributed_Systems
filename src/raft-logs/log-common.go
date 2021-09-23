@@ -8,30 +8,84 @@ import (
 	"time"
 )
 
-type logTopic string
+type LogTopic int
 
 const (
-	DClient  logTopic = "CLNT"
-	DCommit  logTopic = "CMIT"
-	DDrop    logTopic = "DROP"
-	DError   logTopic = "ERRO"
-	DInfo    logTopic = "INFO"
-	DLeader  logTopic = "LEAD"
-	DLog     logTopic = "LOG1"
-	DLog2    logTopic = "LOG2"
-	DPersist logTopic = "PERS"
-	DSnap    logTopic = "SNAP"
-	DTerm    logTopic = "TERM"
-	DTest    logTopic = "TEST"
-	DTimer   logTopic = "TIMR"
-	DTrace   logTopic = "TRCE"
-	DVote    logTopic = "VOTE"
-	DWarn    logTopic = "WARN"
-	debug = 1
+	RAFT_IGNORE    = true
+	COMMIT_IGNORE  = false //apply,commit
+	TIMER_IGNORE   = true  //timer
+	LEADER_IGNORE  = true  //leader
+	APPEND_IGNORE  = true  //append
+	ROLE_IGNORE    = false //term vote
+	PERSIST_IGNORE = false //persist log
+
+	//raft
+	Start LogTopic = iota
+	Commit
+	Drop
+	Error
+	Info
+	Leader
+	LogModify
+	Persist
+	Snap
+	Term
+	Test
+	Timer
+	Trace
+	Vote
+	Warn
+	Log2
+	RaftShutdown
+	Role
+	Apply
+	Append
+	SnapSize
+
+	//kv server
+	ServerReq = 100
+	ServerSnap
+	ServerApply
+	ServerSnapSize
+	ServerShutdown
+	ServerStart
+	ServerConfig
+	ServerMove
+
+	//kv clerk
+	Clerk
+
+	//test config
+	Cfg
+
+	//ctrler
+	CtrlerStart = 200
+	CtrlerQuery
+	CtrlerJoin
+	CtrlerLeave
+	CtrlerMove
+	CtrlerBalance
+	CtrlerApply
+	CtrlerSnap
+	CtrlerReq
+	CtrlerSnapSize
+
+	//shardkv
+	ShardKVReq = 500
+	ShardKVStart
+	ShardKVApply
+	ShardKVConfig
+	ShardKVMigration
+	ShardKVSnap
+	ShardKVSnapSize
+	ShardKVShutDown
+
+	Debug_Level = 2
 )
 
 var debugStart time.Time
-var debugVerbosity int = -1;
+var debugVerbosity int
+var Print_Map map[LogTopic]bool
 
 func getVerbosity() int {
 	v := os.Getenv("VERBOSE")
@@ -45,42 +99,52 @@ func getVerbosity() int {
 	}
 	return level
 }
-func initDebugger() {
+func init() {
 	debugVerbosity = getVerbosity()
 	debugStart = time.Now()
-	
+
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
-}
-
-type Logger struct{
-
-}
-
-func (lg *Logger ) Log(topic logTopic, format string, a ...interface{}) {
-	if debugVerbosity == -1 {
-		 initDebugger();
+	Print_Map = make(map[LogTopic]bool)
+	print_list := []LogTopic{
+		ServerSnap,
+		ServerApply,
+		ServerSnapSize,
+		ServerShutdown,
+		ServerStart,
+		ServerConfig,
+		ServerMove,
+		Log2,
+		Clerk,
+		ShardKVApply,
+		ShardKVConfig,
+		ShardKVMigration,
+		ShardKVReq,
+		ShardKVStart,
+		//CtrlerApply,
 	}
-	
-	if debug >= 1 && debugVerbosity >= 1 {
-		time := time.Since(debugStart).Microseconds()
-		time /= 100
-		prefix := fmt.Sprintf("%06d %v ", time, string(topic))
+
+	for _, v := range print_list {
+		Print_Map[v] = true
+	}
+}
+
+type TopicLogger struct {
+	Me    int
+	Group int
+}
+
+func (tp *TopicLogger) L(topic LogTopic, format string, a ...interface{}) {
+	if Print_Map[topic] {
+		time := time.Since(debugStart).Milliseconds()
+		time_seconds := time / 1000
+		time = time % 1000
+		prefix := ""
+		if topic >= ShardKVReq {
+			prefix = fmt.Sprintf("%03d'%03dms G%03d-S%d ", time_seconds, time, tp.Group, tp.Me)
+		} else {
+			prefix = fmt.Sprintf("%03d'%03dms S%d ", time_seconds, time, tp.Me)
+		}
 		format = prefix + format
 		log.Printf(format, a...)
 	}
 }
-
-// //run only when verbose=-1
-// func (lg *Logger ) L(topic logTopic, format string, a ...interface{}) {
-// 	if debugVerbosity == -1 {
-// 		 initDebugger();
-// 	}
-	
-// 	if debug == -1 && debugVerbosity == -1 {
-// 		time := time.Since(debugStart).Microseconds()
-// 		time /= 100
-// 		prefix := fmt.Sprintf("%06d %v ", time, string(topic))
-// 		format = prefix + format
-// 		log.Printf(format, a...)
-// 	}
-// }

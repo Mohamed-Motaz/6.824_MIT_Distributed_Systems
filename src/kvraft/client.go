@@ -3,17 +3,39 @@ package kvraft
 import (
 	"crypto/rand"
 	"math/big"
+	"sync"
+	"time"
 
 	"6.824/labrpc"
-	raftlogs "6.824/raft-logs"
+	logger "6.824/raft-logs"
 )
 
+var used_ID map[int64]bool
+var map_lock sync.Mutex
+
+func init() {
+	used_ID = make(map[int64]bool)
+	used_ID[-1] = true
+}
+
+func getUnusedClientID() int64 {
+	map_lock.Lock()
+	defer map_lock.Unlock()
+	for {
+		id := nrand()
+		if !used_ID[id] {
+			used_ID[id] = true
+			return id
+		}
+	}
+}
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	logger raftlogs.Logger
-	id int
+	logger logger.TopicLogger
+	id int64
+	seq int   //to keep track of each req seq number, so as not to execute the same req twice
 }
 
 func nrand() int64 {
@@ -27,7 +49,11 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
-	
+	ck.id = getUnusedClientID()
+	ck.seq = 0
+	ck.logger = logger.TopicLogger{Me: int(ck.id) % 1000}
+	ck.logger.L(logger.Clerk, "K%d is now alive", ck.id)
+
 	return ck
 }
 
@@ -46,7 +72,28 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+
+	args := &GetArgs{
+		Key: key,
+		ClientId: ck.id,
+		Seq: ck.seq,
+	}
+
+	for {
+		for i := range ck.servers {		
+
+			reply := &GetReply{}
+			ok := ck.servers[i].Call("KVServer.Get", args, reply)
+			ck.logger.L(logger.Clerk, "K%d sent a request to K%d", ck.id, i)
+			if ok && reply.Err == OK{
+				ck.logger.L(logger.Clerk, 
+					"K%d has sent a get req and was accepted by K%d", ck.id, i)
+				ck.seq++
+				return reply.Value
+			}
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
 }
 
 //
@@ -61,13 +108,37 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	args := &PutAppendArgs{
+		Key: key,
+		Value: value,
+		Op: op,
+		ClientId: ck.id,
+		Seq: ck.seq,
+	}
+
+	//keep sending until a server replies that it has accepted the request
+	for {
+		for i := range ck.servers {			
+			reply := &PutAppendReply{}
+			ok := ck.servers[i].Call("KVServer.PutAppend", args, reply)
+			ck.logger.L(logger.Clerk, "K%d sent a request to K%d", ck.id, i)
+			if ok && reply.Err == OK{
+				ck.logger.L(logger.Clerk, 
+					"K%d has sent a putAppend req and was accepted by K%d", ck.id, i)
+				ck.seq++
+				return
+			}
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
+
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.logger.Log(raftlogs.DLeader, "S%d was called with a put of %v with %v", ck.id, key, value)
+	ck.logger.L(logger.Clerk, "K%d was called with a put of key %v value %v", ck.id, key, value)
 	ck.PutAppend(key, value, "Put")
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.logger.Log(raftlogs.DLeader, "S%d was called with an append of %v with %v", ck.id, key, value)
+	ck.logger.L(logger.Clerk, "K%d was called with an append of key %v value %v", ck.id, key, value)
 	ck.PutAppend(key, value, "Append")
 }

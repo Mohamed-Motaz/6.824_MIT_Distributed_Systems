@@ -4,14 +4,21 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
-	raftlogs "6.824/raft-logs"
+	logger "6.824/raft-logs"
 )
 
-const Debug = false
+const 
+(	Debug = false
+	TYPE_GET    = 0
+	TYPE_PUT    = 1
+	TYPE_APPEND = 2
+	TYPE_OTHER  = 3
+)
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -20,12 +27,16 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
-type Op struct {
+type Command struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientID int64
+	OptType  int
+	Opt      interface{} //not reference
+	Seq int
 }
+
 
 type KVServer struct {
 	mu      sync.Mutex
@@ -33,21 +44,99 @@ type KVServer struct {
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
-	logger raftlogs.Logger
 
 
 	maxraftstate int // snapshot if log grows this big
 
-	// Your definitions here.
+	persister *raft.Persister
+	next_seq    map[int64]int   //map of id of clerk and his next_seq
+	kv_map map[string]string
+	lastApplied int
+	logger logger.TopicLogger
+	reply_chan map[int]chan bool  //map of each peer's channel
 }
 
-
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+func (kv *KVServer) getReplyStruct(req *Command, err Err) interface{} {
+	switch req.OptType{
+	case TYPE_APPEND:
+		fallthrough  //execute next case anyway
+	case TYPE_PUT:
+		return &PutAppendReply{
+			Err: err,
+		}
+	case TYPE_GET:
+		reply := &GetReply{
+			Err: err,
+		}
+		if err == OK { //no error
+			reply.Value = kv.kv_map[req.Opt.(string)]
+		}
+		return reply
+	}
+	return nil
 }
 
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+func (kv *KVServer) hasResult(clientId int64, seq int) bool {
+	return kv.next_seq[clientId] > seq
+}
+
+func (kv *KVServer) doRequest(command *Command) interface{} {
+	kv.mu.Lock()
+	kv.logger.L(logger.ServerReq, "do request args:%#v \n", command)
+
+	//check if already applied
+	if kv.hasResult(command.ClientID, command.Seq) {
+		kv.logger.L(logger.ServerReq, "[%3d--%d] already succesfully executed the request\n",
+			command.ClientID%1000, command.Seq)
+		kv.mu.Unlock()
+		return kv.getReplyStruct(command, OK)
+	}
+
+	index, _, isLeader := kv.rf.Start(*command)
+
+	if !isLeader {
+		kv.logger.L(logger.ServerReq, "declined [%3d--%d] for not leader\n",
+			command.ClientID%1000, command.Seq)
+		kv.mu.Unlock()
+		return kv.getReplyStruct(command, ErrWrongLeader)
+	}else {
+		kv.logger.L(logger.ServerStart, "start [%3d--%d] as leader?\n",
+			command.ClientID%1000, command.Seq)
+	}
+
+	wait_chan := kv.getWaitChan(index)
+	kv.mu.Unlock()
+
+	timeout := time.NewTimer(time.Millisecond * 200)	//wait to see if operation will be done
+
+	//select will block until it recieves either
+	select {
+	case <-wait_chan:
+	case <-timeout.C:
+	}
+
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	
+	if kv.hasResult(command.ClientID, command.Seq) {
+		kv.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! \n",
+			command.ClientID%1000, command.Seq)
+		return kv.getReplyStruct(command, OK)
+	} else {
+
+		kv.logger.L(logger.ServerReq, "[%3d--%d] failed applied \n",
+			command.ClientID%1000, command.Seq)
+		return kv.getReplyStruct(command, ErrNoKey)
+	}
+}
+
+//hold lock
+func (kv *KVServer) getWaitChan(index int) chan bool {
+	if _, ok := kv.reply_chan[index]; !ok{
+		//create the channel
+		kv.reply_chan[index] = make(chan bool)
+	}
+	return kv.reply_chan[index]
 }
 
 //
@@ -88,18 +177,32 @@ func (kv *KVServer) killed() bool {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(Command{})
+	labgob.Register(KeyValue{})
 	
 	kv := new(KVServer)
 	kv.me = me 
+	kv.logger = logger.TopicLogger{
+		Me: me,
+	}
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
+	kv.applyCh = make(chan raft.ApplyMsg, 30)
+	kv.reply_chan = make(map[int]chan bool)
+	kv.lastApplied = 0
+	kv.kv_map = make(map[string]string)
+	kv.next_seq = make(map[int64]int)
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 
-	// You may need initialization code here.
+	//snap := kv.persister.ReadSnapshot()
+	//kv.applyInstallSnapshot(snap)
 
-	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	//go kv.applier()
+
 	// You may need initialization code here.
-	kv.logger.Log(raftlogs.DLeader, "S%d is now alive", kv.me)
+	kv.logger.L(logger.Log2, "S%d is now alive", kv.me)
 	return kv
 }

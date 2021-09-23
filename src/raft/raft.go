@@ -29,7 +29,7 @@ import (
 	//	"6.824/labgob"
 	"6.824/labgob"
 	"6.824/labrpc"
-	raftlogs "6.824/raft-logs"
+	logger "6.824/raft-logs"
 )
 
 const (
@@ -96,7 +96,7 @@ type Raft struct {
 	//volatile
 	timerMuLock sync.Mutex
 	timeToTimeOut time.Time
-	logger raftlogs.Logger
+	logger logger.TopicLogger
 	role int  //FOLLOWER = 0, CANDIDATE = 1, LEADER = 2
 	highestCommitedIndex int
 	lastApplied int
