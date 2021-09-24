@@ -654,6 +654,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	term = rf.currentTerm
 	isLeader = rf.role == LEADER
+	rf.logger.L(logger.Role, "S%v is the leader? %v", rf.me, isLeader)
 	if !isLeader || rf.killed(){
 		rf.mu.Unlock()
 		return 0, term, false

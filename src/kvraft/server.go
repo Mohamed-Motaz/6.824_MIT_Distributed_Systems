@@ -10,6 +10,7 @@ import (
 	"6.824/labrpc"
 	"6.824/raft"
 	logger "6.824/raft-logs"
+	raftlogs "6.824/raft-logs"
 )
 
 const 
@@ -53,9 +54,10 @@ type KVServer struct {
 	kv_map map[string]string
 	lastApplied int
 	logger logger.TopicLogger
-	reply_chan map[int]chan bool  //map of each peer's channel
+	reply_chan map[int]chan bool  //map of each log entry's index channel
 }
 
+//hold lock
 func (kv *KVServer) getReplyStruct(req *Command, err Err) interface{} {
 	switch req.OptType{
 	case TYPE_APPEND:
@@ -88,7 +90,7 @@ func (kv *KVServer) doRequest(command *Command) interface{} {
 	if kv.hasResult(command.ClientID, command.Seq) {
 		kv.logger.L(logger.ServerReq, "[%3d--%d] already succesfully executed the request\n",
 			command.ClientID%1000, command.Seq)
-		kv.mu.Unlock()
+		defer kv.mu.Unlock()
 		return kv.getReplyStruct(command, OK)
 	}
 
@@ -97,7 +99,7 @@ func (kv *KVServer) doRequest(command *Command) interface{} {
 	if !isLeader {
 		kv.logger.L(logger.ServerReq, "declined [%3d--%d] for not leader\n",
 			command.ClientID%1000, command.Seq)
-		kv.mu.Unlock()
+		defer kv.mu.Unlock()
 		return kv.getReplyStruct(command, ErrWrongLeader)
 	}else {
 		kv.logger.L(logger.ServerStart, "start [%3d--%d] as leader?\n",
@@ -111,7 +113,7 @@ func (kv *KVServer) doRequest(command *Command) interface{} {
 
 	//select will block until it recieves either
 	select {
-	case <-wait_chan:
+	case <-wait_chan:   //recieved when channel closes
 	case <-timeout.C:
 	}
 
@@ -119,7 +121,7 @@ func (kv *KVServer) doRequest(command *Command) interface{} {
 	defer kv.mu.Unlock()
 	
 	if kv.hasResult(command.ClientID, command.Seq) {
-		kv.logger.L(logger.ServerReq, "[%3d--%d] successed !!!!! \n",
+		kv.logger.L(logger.ServerReq, "[%3d--%d] success !!!!! \n",
 			command.ClientID%1000, command.Seq)
 		return kv.getReplyStruct(command, OK)
 	} else {
@@ -137,6 +139,70 @@ func (kv *KVServer) getWaitChan(index int) chan bool {
 		kv.reply_chan[index] = make(chan bool)
 	}
 	return kv.reply_chan[index]
+}
+
+//delete the newly created channel and therefore channel is notified
+func (kv *KVServer) notify(index int){
+	if c, ok := kv.reply_chan[index]; ok {
+		close(c)
+		delete(kv.reply_chan, index)
+	}
+}
+
+//recieve messages on the applyCh
+func (kv *KVServer) applier(){
+	for !kv.killed(){
+		mes := <- kv.applyCh
+		kv.mu.Lock()
+		if mes.CommandValid && mes.CommandIndex == 1 + kv.lastApplied{
+			kv.logger.L(logger.ServerApply, "apply %d %#v lastApplied %v\n", mes.CommandIndex, mes.Command, kv.lastApplied)
+
+			kv.lastApplied = mes.CommandIndex
+			v, ok := mes.Command.(Command)
+			if !ok{
+				panic("")
+			}
+			kv.applyCommand(v)
+			//kv.reply_chan[mes.CommandIndex] <- true  //send ont the channel that it is done
+			kv.notify(mes.CommandIndex)
+		}else if mes.CommandValid && mes.CommandIndex != 1+kv.lastApplied {
+			// out of order cmd, just ignore
+			kv.logger.L(logger.ServerApply, "ignore apply %v for lastApplied %v\n",
+			mes.CommandIndex, kv.lastApplied)
+		} else {
+			// wrong command
+			kv.logger.L(logger.ServerApply, "Invalid apply msg\n")
+		}
+		kv.mu.Unlock()
+
+	}
+}
+
+func (kv *KVServer) applyCommand(command Command){
+	//apply the append or put, since get has already been handled
+
+	//make sure command is less than the next seq
+	if (command.Seq < kv.next_seq[command.ClientID]){
+		return
+	}
+	if command.Seq != kv.next_seq[command.ClientID]{
+		panic("seq gap present!");
+	}
+
+	kv.logger.L(raftlogs.Log2, "This is the recieved command %#v", command)
+
+	//correct command recieved
+	kv.next_seq[command.ClientID]++
+	if (command.OptType == TYPE_PUT || command.OptType == TYPE_APPEND){
+		keyV := command.Opt.(KeyValue)
+		if command.OptType == TYPE_PUT{
+			kv.kv_map[keyV.Key] = keyV.Value
+		}
+		if command.OptType == TYPE_APPEND{
+			kv.kv_map[keyV.Key] += keyV.Value
+		}
+	}
+	
 }
 
 //
@@ -200,7 +266,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-	//go kv.applier()
+	go kv.applier()
 
 	// You may need initialization code here.
 	kv.logger.L(logger.Log2, "S%d is now alive", kv.me)
