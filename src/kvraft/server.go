@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -154,7 +155,18 @@ func (kv *KVServer) applier(){
 	for !kv.killed(){
 		mes := <- kv.applyCh
 		kv.mu.Lock()
-		if mes.CommandValid && mes.CommandIndex == 1 + kv.lastApplied{
+		if mes.SnapshotValid { //raft needs a snapshot
+			kv.logger.L(logger.ServerSnap, "recv Installsnapshot %v %v\n", mes.SnapshotIndex, kv.lastApplied)
+			if kv.rf.CondInstallSnapshot(mes.SnapshotTerm,
+				mes.SnapshotIndex, mes.Snapshot) {
+				old_apply := kv.lastApplied
+				kv.logger.L(logger.ServerSnap, "decide Installsnapshot %v <- %v\n", mes.SnapshotIndex, kv.lastApplied)
+				kv.applyInstallSnapshot(mes.Snapshot)
+				for i := old_apply + 1; i <= mes.SnapshotIndex; i++ {
+					kv.notify(i)   //delete all reply_chan for this seq of indices
+				}
+			}
+		}else if mes.CommandValid && mes.CommandIndex == 1 + kv.lastApplied{
 			kv.logger.L(logger.ServerApply, "apply %d %#v lastApplied %v\n", mes.CommandIndex, mes.Command, kv.lastApplied)
 
 			kv.lastApplied = mes.CommandIndex
@@ -163,8 +175,12 @@ func (kv *KVServer) applier(){
 				panic("")
 			}
 			kv.applyCommand(v)
-			//kv.reply_chan[mes.CommandIndex] <- true  //send ont the channel that it is done
-			kv.notify(mes.CommandIndex)
+			//correct command index so must do it here
+			if kv.raftNeedSnapshot() {
+				kv.doSnapshotForRaft(mes.CommandIndex)
+			}
+	
+			kv.notify(mes.CommandIndex)     //send a signal to the wait chan
 		}else if mes.CommandValid && mes.CommandIndex != 1+kv.lastApplied {
 			// out of order cmd, just ignore
 			kv.logger.L(logger.ServerApply, "ignore apply %v for lastApplied %v\n",
@@ -173,6 +189,11 @@ func (kv *KVServer) applier(){
 			// wrong command
 			kv.logger.L(logger.ServerApply, "Invalid apply msg\n")
 		}
+
+		// if kv.raftNeedSnapshot() {
+		// 	kv.doSnapshotForRaft(mes.CommandIndex)
+		// }
+
 		kv.mu.Unlock()
 
 	}
@@ -203,6 +224,57 @@ func (kv *KVServer) applyCommand(command Command){
 		}
 	}
 	
+}
+
+//apply snapshot
+func (kv *KVServer) applyInstallSnapshot(snap []byte){
+	if snap == nil || len(snap) < 1 { 
+		kv.logger.L(logger.ServerSnap, "empty snap\n")
+		return
+	}
+	
+	r := bytes.NewBuffer(snap)
+	d := labgob.NewDecoder(r)
+	lastApplied := 0
+	next_seq := make(map[int64]int)
+	kv_map := make(map[string]string)
+	if d.Decode(&lastApplied) != nil ||
+		d.Decode(&next_seq) != nil ||
+		d.Decode(&kv_map) != nil {
+		kv.logger.L(logger.ServerSnap, "apply install decode err\n")
+		panic("err decode snap")
+	} else {
+		kv.lastApplied = lastApplied
+		kv.next_seq = next_seq
+		kv.kv_map = kv_map
+	}
+}
+
+//hold lock
+func (kv *KVServer) doSnapshotForRaft(index int) {
+	kv.logger.L(logger.ServerSnap, "do snapshot for raft %v %v\n", index, kv.lastApplied)
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	lastIndex := kv.lastApplied
+	e.Encode(lastIndex)
+	e.Encode(kv.next_seq)
+	e.Encode(kv.kv_map)
+	kv.rf.Snapshot(index, w.Bytes())
+}
+
+//hold lock
+func (kv *KVServer) raftNeedSnapshot() bool {
+	if kv.maxraftstate == -1 {
+		return false
+	}
+	size := kv.persister.RaftStateSize()
+	if size >= kv.maxraftstate {
+		kv.logger.L(logger.ServerSnapSize, "used size: %d / %d \n", size, kv.maxraftstate)
+		return true
+	}
+	return false
 }
 
 //
@@ -261,8 +333,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	//snap := kv.persister.ReadSnapshot()
-	//kv.applyInstallSnapshot(snap)
+	snap := kv.persister.ReadSnapshot()
+	kv.applyInstallSnapshot(snap)
 
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
