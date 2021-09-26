@@ -1,10 +1,14 @@
 package raft
 
+import (
+	raftlogs "6.824/raft-only-logs"
+)
+
 func (rf *Raft) doWorkBeforeTransitioningToLeader(){
 	rf.role = LEADER
-	//rf.logger.Log(raftlogs.DLeader, 
-		//"S%d just become leader for the term %d",
-		//rf.me, rf.currentTerm)
+	rf.logger.Log(raftlogs.DLeader, 
+		"S%d just become leader for the term %d",
+		rf.me, rf.currentTerm)
 	for i := 0; i < rf.peerCnt ; i++{
 		rf.nextIndex[i] = rf.lastLogIndex + 1
 		rf.matchIndex[i] = 0
@@ -19,9 +23,9 @@ func (rf *Raft) doCandidateWork(term int, args *RequestVoteArgs){
 					Term: -1,
 					VoteGranted: false,
 				}
-				//rf.logger.Log(raftlogs.DVote, "S%d sent a request vote to S%d", rf.me, peer);
+				rf.logger.Log(raftlogs.DVote, "S%d sent a request vote to S%d", rf.me, peer);
 				ok := rf.sendRequestVote(peer, args, reply)				
-				//rf.logger.Log(raftlogs.DVote, "S%d got this reply from S%d", rf.me, peer)
+				rf.logger.Log(raftlogs.DVote, "S%d got this reply from S%d", rf.me, peer)
 
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
@@ -39,9 +43,9 @@ func (rf *Raft) doCandidateWork(term int, args *RequestVoteArgs){
 					return;
 				} 
 				rf.votes++;
-				//rf.logger.Log(raftlogs.DVote, "S%d got a vote from S%d", rf.me, peer)
+				rf.logger.Log(raftlogs.DVote, "S%d got a vote from S%d", rf.me, peer)
 				if rf.votes >= rf.majority{
-					//rf.logger.Log(raftlogs.DLeader, "S%d just won the election", rf.me)
+					rf.logger.Log(raftlogs.DLeader, "S%d just won the election", rf.me)
 					rf.doWorkBeforeTransitioningToLeader()
 					go rf.doLeaderWork(rf.currentTerm)
 				}
@@ -53,7 +57,7 @@ func (rf *Raft) doCandidateWork(term int, args *RequestVoteArgs){
 
 
 func (rf *Raft) newElection(){
-	//rf.logger.Log(raftlogs.DTimer, "S%d is starting a new election", rf.me);
+	rf.logger.Log(raftlogs.DTimer, "S%d is starting a new election", rf.me);
 
 	rf.mu.Lock()
 	if rf.role == LEADER {

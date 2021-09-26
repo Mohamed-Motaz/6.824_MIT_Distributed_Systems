@@ -3,13 +3,15 @@ package raft
 import (
 	"sort"
 	"time"
+
+	raftlogs "6.824/raft-only-logs"
 )
 
 
 func (rf *Raft) doLeaderWork(leaderTerm int){
 	rf.mu.Lock()
 	if (rf.role != LEADER || rf.currentTerm != leaderTerm){     //difference
-		//rf.logger.Log(raftlogs.DLeader, "S%d is no longer a leader and is stepping down", rf.me)
+		rf.logger.Log(raftlogs.DLeader, "S%d is no longer a leader and is stepping down", rf.me)
 		rf.mu.Unlock()
 		return
 	}
@@ -25,7 +27,7 @@ func (rf *Raft) doLeaderWork(leaderTerm int){
 					rf.wakeLeaderCond.Broadcast()  //wake up leader to send heartbeats
 					heartsbeatsTimer.Reset(HEART_INTERVAL)
 				case <- followersKilled:
-					//rf.logger.Log(raftlogs.DLeader, "S%d has stopped giving out heatbeats", rf.me)
+					rf.logger.Log(raftlogs.DLeader, "S%d has stopped giving out heatbeats", rf.me)
 					rf.wakeLeaderCond.Broadcast()  //difference
 					return
 
@@ -40,7 +42,7 @@ func (rf *Raft) doLeaderWork(leaderTerm int){
 
 //hold lock
 func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
-	//rf.logger.Log(raftlogs.DLeader, "S%d starting %d threads", rf.me, rf.peerCnt - 1)
+	rf.logger.Log(raftlogs.DLeader, "S%d starting %d threads", rf.me, rf.peerCnt - 1)
 
 	for i := 0; i < rf.peerCnt; i++{
 		if i != rf.me {
@@ -56,7 +58,7 @@ func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
 			go func(peer int){ 
 				go rf.doAppendRPC(peer, leaderTerm, tempInitialArgs)
 				rf.mu.Lock()
-				//defer func() {//rf.logger.Log(raftlogs.DLeader, "S%d leader for term %d loop has ended", rf.me, leaderTerm)}()					
+				defer func() {rf.logger.Log(raftlogs.DLeader, "S%d leader for term %d loop has ended", rf.me, leaderTerm)}()					
 				defer rf.mu.Unlock()
 				defer func(){
 					followersKilled <- true    //signal to the leader that a follower has died
@@ -72,14 +74,14 @@ func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
 					//my last index is less than the peers next index, 
 					//which means I have no logs to send
 					if (rf.lastLogIndex < rf.nextIndex[peer]){ 
-						//rf.logger.Log(raftlogs.DLeader, "S%d has no entries to send, so only sending hearbeats", rf.me)
+						rf.logger.Log(raftlogs.DLeader, "S%d has no entries to send, so only sending hearbeats", rf.me)
 						//send a heartbeat
 						prevLogIndex := rf.nextIndex[peer] - 1
 						prevLogTerm := rf.logs[prevLogIndex-rf.offset].Term
 						if prevLogIndex != rf.lastLogIndex{
-							//rf.logger.Log(raftlogs.DLeader, 
-								//"S%d has a problem his prevLogIdx is %d and mine is %d",
-								//rf.me, prevLogIndex, rf.lastLogIndex)
+							rf.logger.Log(raftlogs.DLeader, 
+								"S%d has a problem his prevLogIdx is %d and mine is %d",
+								rf.me, prevLogIndex, rf.lastLogIndex)
 						}
 
 						go rf.doAppendRPC(peer, leaderTerm, &AppendEntryArgs{
@@ -109,7 +111,7 @@ func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
 						
 					}
 					
-					// //rf.logger.Log(raftlogs.DLeader, "S%d sending append entries to S%d", rf.me, peer)
+					// rf.logger.Log(raftlogs.DLeader, "S%d sending append entries to S%d", rf.me, peer)
 
 					//sleep until leader wakes up to send an append entry
 					rf.wakeLeaderCond.Wait()
@@ -123,14 +125,14 @@ func (rf *Raft) spawnPeerSyncers(leaderTerm int, followersKilled chan bool){
 
 func (rf *Raft) doAppendRPC(peer int, term int, args *AppendEntryArgs){
 	if len(args.Entries) == 0 {
-		//rf.logger.Log(raftlogs.DLeader, "S%d sent an append entry as a heartbeat to S%d", 
-		//rf.me, peer)
+		rf.logger.Log(raftlogs.DLeader, "S%d sent an append entry as a heartbeat to S%d", 
+		rf.me, peer)
 	}else if len(args.Entries) == 1 {
-		//rf.logger.Log(raftlogs.DLeader, "S%d sent an append entry with only one piece of data data %v to S%d", 
-		//rf.me, args.Entries, peer)
+		rf.logger.Log(raftlogs.DLeader, "S%d sent an append entry with only one piece of data data %v to S%d", 
+		rf.me, args.Entries, peer)
 	}else{
-		//rf.logger.Log(raftlogs.DLeader, "S%d sent an append entry with multiple pieces of data %v to S%d", 
-		//rf.me, args.Entries, peer)
+		rf.logger.Log(raftlogs.DLeader, "S%d sent an append entry with multiple pieces of data %v to S%d", 
+		rf.me, args.Entries, peer)
 	}
 
 	reply := &AppendEntryReply{
@@ -193,7 +195,7 @@ func (rf *Raft) checkAppendEntryReplyRPC(peer int, term int, reply *AppendEntryR
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	//rf.logger.Log(raftlogs.DLeader, "S%d got a reply from %d", rf.me, peer)
+	rf.logger.Log(raftlogs.DLeader, "S%d got a reply from %d", rf.me, peer)
 
 	//i have a lower term number and shouldnt be leader
 	if reply.Term > rf.currentTerm {
@@ -222,19 +224,19 @@ func (rf *Raft) checkAppendEntryReplyRPC(peer int, term int, reply *AppendEntryR
 
 	//calculate where to rollback
 	nextIndex := rf.getNextIndex(reply.ConflictTerm, reply.ConflictIndex, reply.ConflictLen)
-	//rf.logger.Log(raftlogs.DLeader, "S%d about to initiate logs rollback for S%d from %d to %d", 
-			//rf.me, peer, rf.nextIndex[peer], nextIndex)
+	rf.logger.Log(raftlogs.DLeader, "S%d about to initiate logs rollback for S%d from %d to %d", 
+			rf.me, peer, rf.nextIndex[peer], nextIndex)
 
 	//check if outdated message
 	if rf.matchIndex[peer] >= nextIndex {
-		//rf.logger.Log(raftlogs.DLeader, "S%d the leader rejects append conflict, next %d but match is %d",
-						//rf.me, nextIndex, rf.matchIndex[peer])
+		rf.logger.Log(raftlogs.DLeader, "S%d the leader rejects append conflict, next %d but match is %d",
+						rf.me, nextIndex, rf.matchIndex[peer])
 		return	
 	}
 
 	rf.nextIndex[peer] = nextIndex
-	//rf.logger.Log(raftlogs.DLeader, "S%d updated D%d nextIdx to %d",
-		//rf.me, peer, nextIndex)
+	rf.logger.Log(raftlogs.DLeader, "S%d updated D%d nextIdx to %d",
+		rf.me, peer, nextIndex)
 
 }
 
